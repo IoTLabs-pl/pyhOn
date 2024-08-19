@@ -1,300 +1,326 @@
+from contextlib import AsyncExitStack
 import json
-import logging
-import re
-import secrets
-import urllib
-from contextlib import suppress
-from dataclasses import dataclass
+from logging import getLogger
+from re import compile as re_compile
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-from urllib import parse
-from urllib.parse import quote
+from typing import Any, cast
+from urllib.parse import parse_qsl, urlsplit
+from uuid import uuid4
 
 import aiohttp
-from aiohttp import ClientResponse
-from yarl import URL
 
 from pyhon import const, exceptions
 from pyhon.connection.device import HonDevice
-from pyhon.connection.handler.auth import HonAuthConnectionHandler
+from pyhon.connection.handler.auth import AuthSessionWrapper
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = getLogger(__name__)
+
+_HREF_REGEX = re_compile(r"""(?:url|href)\s*=\s*["'](.+?)["']""")
+_HON_REDIRECT_REGEX = re_compile(r"""["'](hon://.+?)['"]""")
+
+
+def _parse_query_string(url: str, from_fragment: bool = False) -> dict[str, str]:
+    """Parse a query string from a URL.
+
+    Args:
+        url (str): URL to parse.
+        from_fragment (bool, optional): Parse from fragment instead of query.
+          Defaults to False.
+
+    Returns:
+        query_params (dict[str,str]): Parsed query string.
+    """
+    splitted = urlsplit(url)
+    if from_fragment:
+        base = splitted.fragment
+    else:
+        base = splitted.query
+    return dict(parse_qsl(base))
 
 
 @dataclass
-class HonLoginData:
-    url: str = ""
-    email: str = ""
-    password: str = ""
-    fw_uid: str = ""
-    loaded: Optional[Dict[str, Any]] = None
+class _LoginData:
+    email: str | None = None
+    password: str | None = None
 
-
-@dataclass
-class HonAuthData:
-    access_token: str = ""
-    refresh_token: str = ""
-    cognito_token: str = ""
-    id_token: str = ""
-
-
-class HonAuth:
-    _TOKEN_EXPIRES_AFTER_HOURS = 8
-    _TOKEN_EXPIRE_WARNING_HOURS = 7
-
-    def __init__(
-        self,
-        session: aiohttp.ClientSession,
-        email: str,
-        password: str,
-        device: HonDevice,
-    ) -> None:
-        self._session = session
-        self._request = HonAuthConnectionHandler(session)
-        self._login_data = HonLoginData()
-        self._login_data.email = email
-        self._login_data.password = password
-        self._device = device
-        self._expires: datetime = datetime.utcnow()
-        self._auth = HonAuthData()
+    url: str | None = None
+    token_url: str | None = None
 
     @property
-    def cognito_token(self) -> str:
-        return self._auth.cognito_token
-
-    @property
-    def id_token(self) -> str:
-        return self._auth.id_token
-
-    @property
-    def access_token(self) -> str:
-        return self._auth.access_token
-
-    @property
-    def refresh_token(self) -> str:
-        return self._auth.refresh_token
-
-    def _check_token_expiration(self, hours: int) -> bool:
-        return datetime.utcnow() >= self._expires + timedelta(hours=hours)
-
-    @property
-    def token_is_expired(self) -> bool:
-        return self._check_token_expiration(self._TOKEN_EXPIRES_AFTER_HOURS)
-
-    @property
-    def token_expires_soon(self) -> bool:
-        return self._check_token_expiration(self._TOKEN_EXPIRE_WARNING_HOURS)
-
-    async def _error_logger(self, response: ClientResponse, fail: bool = True) -> None:
-        output = "hOn Authentication Error\n"
-        for i, (status, url) in enumerate(self._request.called_urls):
-            output += f" {i + 1: 2d}     {status} - {url}\n"
-        output += f"ERROR - {response.status} - {response.request_info.url}\n"
-        output += f"{15 * '='} Response {15 * '='}\n{await response.text()}\n{40 * '='}"
-        _LOGGER.error(output)
-        if fail:
-            raise exceptions.HonAuthenticationError("Can't login")
-
-    @staticmethod
-    def _generate_nonce() -> str:
-        nonce = secrets.token_hex(16)
-        return f"{nonce[:8]}-{nonce[8:12]}-{nonce[12:16]}-{nonce[16:20]}-{nonce[20:]}"
-
-    async def _load_login(self) -> bool:
-        login_url = await self._introduce()
-        login_url = await self._handle_redirects(login_url)
-        return await self._login_url(login_url)
-
-    async def _introduce(self) -> str:
-        redirect_uri = urllib.parse.quote(f"{const.APP}://mobilesdk/detect/oauth/done")
-        params = {
-            "response_type": "token+id_token",
-            "client_id": const.CLIENT_ID,
-            "redirect_uri": redirect_uri,
-            "display": "touch",
-            "scope": "api openid refresh_token web",
-            "nonce": self._generate_nonce(),
-        }
-        params_encode = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"{const.AUTH_API}/services/oauth2/authorize/expid_Login?{params_encode}"
-        async with self._request.get(url) as response:
-            text = await response.text()
-            self._expires = datetime.utcnow()
-            login_url: List[str] = re.findall("(?:url|href) ?= ?'(.+?)'", text)
-            if not login_url:
-                if "oauth/done#access_token=" in text:
-                    self._parse_token_data(text)
-                    raise exceptions.HonNoAuthenticationNeeded()
-                await self._error_logger(response)
-            # As of July 2024 the login page has changed,
-            # and we started getting a /NewhOnLogin based relative URL in JS to parse
-            if login_url[0].startswith("/NewhOnLogin"):
-                # Force use of the old login page to avoid having
-                # to make the new one work..
-                login_url[0] = f"{const.AUTH_API}/s/login{login_url[0]}"
-        return login_url[0]
-
-    async def _manual_redirect(self, url: str) -> str:
-        async with self._request.get(url, allow_redirects=False) as response:
-            new_location = response.headers.get("Location", "")
-            if not new_location:
-                return url
-        return new_location
-
-    async def _handle_redirects(self, login_url: str) -> str:
-        redirect1 = await self._manual_redirect(login_url)
-        redirect2 = await self._manual_redirect(redirect1)
-        return f"{redirect2}&System=IoT_Mobile_App&RegistrationSubChannel=hOn"
-
-    async def _login_url(self, login_url: str) -> bool:
-        headers = {"user-agent": const.USER_AGENT}
-        url = URL(login_url, encoded=True)
-        async with self._request.get(url, headers=headers) as response:
-            text = await response.text()
-            if context := re.findall('"fwuid":"(.*?)","loaded":(\\{.*?})', text):
-                fw_uid, loaded_str = context[0]
-                self._login_data.fw_uid = fw_uid
-                self._login_data.loaded = json.loads(loaded_str)
-                self._login_data.url = login_url.replace(const.AUTH_API, "")
-                return True
-            await self._error_logger(response)
-        return False
-
-    async def _login(self) -> str:
-        start_url = self._login_data.url.rsplit("startURL=", maxsplit=1)[-1]
-        start_url = parse.unquote(start_url).split("%3D")[0]
+    def message_action_data(self) -> dict[str, Any]:
+        if not self.email or not self.password or not self.url:
+            raise ValueError("Missing data", self.email, self.password, self.url)
         action = {
             "id": "79;a",
             "descriptor": "apex://LightningLoginCustomController/ACTION$login",
             "callingDescriptor": "markup://c:loginForm",
             "params": {
-                "username": self._login_data.email,
-                "password": self._login_data.password,
-                "startUrl": start_url,
+                "username": self.email,
+                "password": self.password,
+                "startUrl": _parse_query_string(self.url)["startURL"],
             },
         }
-        data = {
+        return {
             "message": {"actions": [action]},
-            "aura.context": {
-                "mode": "PROD",
-                "fwuid": self._login_data.fw_uid,
-                "app": "siteforce:loginApp2",
-                "loaded": self._login_data.loaded,
-                "dn": [],
-                "globals": {},
-                "uad": False,
-            },
-            "aura.pageURI": self._login_data.url,
+            "aura.context": {"mode": "PROD", "app": "siteforce:loginApp2"},
+            "aura.pageURI": self.url.removeprefix(const.AUTH_API_URL),
             "aura.token": None,
         }
-        params = {"r": 3, "other.LightningLoginCustom.login": 1}
-        async with self._request.post(
-            const.AUTH_API + "/s/sfsites/aura",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data="&".join(f"{k}={quote(json.dumps(v))}" for k, v in data.items()),
-            params=params,
+
+
+@dataclass
+class _Tokens:
+    __TOKEN_LIFETIME = timedelta(hours=8)
+    __TOKEN_LIFETIME_WARNING_TIME = __TOKEN_LIFETIME - timedelta(hours=1)
+
+    access_token: str | None = None
+    id_token: str | None = None
+    refresh_token: str | None = None
+    cognito_token: str | None = None
+    iot_core_token: str | None = None
+
+    __created_at: datetime = field(default_factory=datetime.now, init=False)
+
+    @classmethod
+    def from_html(cls, html: str) -> "_Tokens":
+        """Parse access_token, id_token and refresh_token from the HTML
+        page redirecting to hOn app URI with OAuth data in fragment.
+
+        Args:
+            html (str): HTML page content.
+        """
+        redirect_uri = _HON_REDIRECT_REGEX.search(html)
+
+        if not redirect_uri:
+            raise ValueError("No redirect URI found in HTML", html)
+
+        parsed = _parse_query_string(redirect_uri[1], from_fragment=True)
+        return cls.from_dict(parsed)
+
+    @classmethod
+    def initializable_field_names(cls) -> set[str]:
+        return {f.name for f in fields(cls) if f.init}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> "_Tokens":
+        """Create a _Tokens object from a dictionary.
+
+        Args:
+            data (dict): Dictionary containing the tokens.
+        """
+        field_names = cls.initializable_field_names().intersection(data.keys())
+        if len(field_names) == 0:
+            raise ValueError("No tokens found in data", data)
+
+        return cls(**{k: v for k, v in data.items() if k in field_names})
+
+    @property
+    def expired(self) -> bool:
+        return datetime.now() >= self.__created_at + self.__TOKEN_LIFETIME
+
+    @property
+    def expires_soon(self) -> bool:
+        return datetime.now() >= self.__created_at + self.__TOKEN_LIFETIME_WARNING_TIME
+
+    @property
+    def initialized(self) -> bool:
+        return all([self.access_token, self.id_token, self.refresh_token])
+
+
+class HonAuth:
+    def __init__(
+        self,
+        email: str,
+        password: str,
+        device: HonDevice,
+        session: aiohttp.ClientSession | None = None,
+        refresh_token: str | None = None,
+    ) -> None:
+        self._session = AuthSessionWrapper(session)
+        self._resources = AsyncExitStack()
+        self._login_data = _LoginData(email=email, password=password)
+        self._device = device
+        self._tokens = _Tokens(refresh_token=refresh_token)
+
+    async def _ensure_authenticated(self, force: bool = False) -> None:
+        """Ensure that the user is authenticated.
+        If the tokens are about to expiry, refresh them.
+        After this method is called, the access_token,
+        refresh_token and id_token are guaranteed to be set.
+        """
+        with self._session.session_history_tracker:
+            if not self._tokens.initialized or self._tokens.expires_soon or force:
+                if self._tokens.refresh_token:
+                    await self._refresh()
+
+                if not self._tokens.initialized:
+                    await self._retrieve_tokens()
+
+            if not self._tokens.initialized:
+                raise exceptions.HonAuthenticationError("Could not authenticate")
+
+    async def get_access_token(self, force: bool = False) -> str:
+        """Get the access token.
+
+        Returns:
+            access_token (str): The access token.
+        """
+        await self._ensure_authenticated(force)
+        return cast(str, self._tokens.access_token)
+
+    async def get_id_token(self, force: bool = False) -> str:
+        """Get the ID token.
+
+        Returns:
+            id_token (str): The ID token.
+        """
+        await self._ensure_authenticated(force)
+        return cast(str, self._tokens.id_token)
+
+    async def get_cognito_token(self, force: bool = False) -> str:
+        """Get the Cognito token.
+
+        Returns:
+            cognito_token (str): The Cognito token.
+        """
+        with self._session.session_history_tracker:
+            if not self._tokens.cognito_token or force:
+                await self._retrieve_cognito_token()
+            return cast(str, self._tokens.cognito_token)
+
+    async def get_iot_core_token(self, force: bool = False) -> str:
+        """Get the IoT Core token.
+
+        Returns:
+            iot_core_token (str): The AWS IoT Core token.
+        """
+        with self._session.session_history_tracker:
+            if not self._tokens.iot_core_token or force:
+                await self._retrieve_iot_core_token()
+            return cast(str, self._tokens.iot_core_token)
+
+    async def _authorize(self) -> None:
+        self._tokens = _Tokens()
+        self._session.clear_cookies()
+
+        _LOGGER.debug("Starting OAuth2 authorization")
+
+        async with self._session.get(
+            f"{const.AUTH_API_URL}/services/oauth2/authorize/expid_Login",
+            params={
+                "response_type": "token id_token",
+                "client_id": const.CLIENT_ID,
+                "redirect_uri": "hon://mobilesdk/detect/oauth/done",
+                "display": "touch",
+                "scope": "api openid refresh_token web",
+                "nonce": str(uuid4()),
+            },
         ) as response:
-            if response.status == 200:
-                with suppress(json.JSONDecodeError, KeyError):
-                    result = await response.json()
-                    url: str = result["events"][0]["attributes"]["values"]["url"]
-                    return url
-            await self._error_logger(response)
-            return ""
+            text = await response.text()
 
-    def _parse_token_data(self, text: str) -> bool:
-        if access_token := re.findall("access_token=(.*?)&", text):
-            self._auth.access_token = access_token[0]
-        if refresh_token := re.findall("refresh_token=(.*?)&", text):
-            self._auth.refresh_token = parse.unquote(refresh_token[0])
-        if id_token := re.findall("id_token=(.*?)&", text):
-            self._auth.id_token = id_token[0]
-        return bool(access_token and refresh_token and id_token)
-
-    async def _get_token(self, url: str) -> bool:
-        async with self._request.get(url) as response:
-            if response.status != 200:
-                await self._error_logger(response)
-                return False
-            url_search = re.findall(
-                "href\\s*=\\s*[\"'](.+?)[\"']", await response.text()
-            )
-            if not url_search:
-                await self._error_logger(response)
-                return False
-        if "ProgressiveLogin" in url_search[0]:
-            async with self._request.get(url_search[0]) as response:
-                if response.status != 200:
-                    await self._error_logger(response)
-                    return False
-                url_search = re.findall(
-                    "href\\s*=\\s*[\"'](.*?)[\"']", await response.text()
-                )
-        url = const.AUTH_API + url_search[0]
-        async with self._request.get(url) as response:
-            if response.status != 200:
-                await self._error_logger(response)
-                return False
-            if not self._parse_token_data(await response.text()):
-                await self._error_logger(response)
-                return False
-        return True
-
-    async def _api_auth(self) -> bool:
-        post_headers = {"id-token": self._auth.id_token}
-        data = self._device.get()
-        async with self._request.post(
-            f"{const.API_URL}/auth/v1/login", headers=post_headers, json=data
-        ) as response:
             try:
-                json_data = await response.json()
-            except json.JSONDecodeError:
-                await self._error_logger(response)
-                return False
-            self._auth.cognito_token = json_data.get("cognitoUser", {}).get("Token", "")
-            if not self._auth.cognito_token:
-                _LOGGER.error(json_data)
-                raise exceptions.HonAuthenticationError()
-        return True
+                self._tokens = _Tokens.from_html(text)
+            except ValueError:
+                pass
+            else:
+                return
 
-    async def authenticate(self) -> None:
-        self.clear()
-        try:
-            if not await self._load_login():
-                raise exceptions.HonAuthenticationError("Can't open login page")
-            if not (url := await self._login()):
-                raise exceptions.HonAuthenticationError("Can't login")
-            if not await self._get_token(url):
-                raise exceptions.HonAuthenticationError("Can't get token")
-            if not await self._api_auth():
-                raise exceptions.HonAuthenticationError("Can't get api token")
-        except exceptions.HonNoAuthenticationNeeded:
+            login_url = _HREF_REGEX.search(text)
+
+            if not login_url:
+                raise exceptions.HonAuthenticationError("No login URL found")
+
+            if login_url[1].startswith("/NewhOnLogin"):
+                self._login_data.url = f"{const.AUTH_API_URL}/s/login{login_url[1]}"
+            else:
+                self._login_data.url = login_url[1]
+
+    async def _login(self) -> None:
+        """Login to the hOn account. Retrieve the token_url."""
+        await self._authorize()
+
+        if self._tokens.initialized:
             return
 
-    async def refresh(self, refresh_token: str = "") -> bool:
-        if refresh_token:
-            self._auth.refresh_token = refresh_token
-        params = {
-            "client_id": const.CLIENT_ID,
-            "refresh_token": self._auth.refresh_token,
-            "grant_type": "refresh_token",
-        }
-        async with self._request.post(
-            f"{const.AUTH_API}/services/oauth2/token", params=params
+        _LOGGER.debug("Logging in")
+        async with self._session.post(
+            f"{const.AUTH_API_URL}/s/sfsites/aura",
+            data={
+                k: json.dumps(v)
+                for k, v in self._login_data.message_action_data.items()
+            },
+            params={"r": 3, "other.LightningLoginCustom.login": 1},
         ) as response:
-            if response.status >= 400:
-                await self._error_logger(response, fail=False)
-                return False
-            data = await response.json()
-        self._expires = datetime.utcnow()
-        self._auth.id_token = data["id_token"]
-        self._auth.access_token = data["access_token"]
-        return await self._api_auth()
+            result = await response.json()
+            token_url = result["events"][0]["attributes"]["values"]["url"]
+            self._login_data.token_url = token_url
 
-    def clear(self) -> None:
-        self._session.cookie_jar.clear_domain(const.AUTH_API.split("/")[-2])
-        self._request.called_urls = []
-        self._auth.cognito_token = ""
-        self._auth.id_token = ""
-        self._auth.access_token = ""
-        self._auth.refresh_token = ""
+    async def _retrieve_tokens(self) -> None:
+        """Retrieve the access_token, id_token and refresh_token from the token_url."""
+        await self._login()
+
+        if self._tokens.initialized:
+            return
+
+        _LOGGER.debug("Getting tokens")
+        url = self._login_data.token_url
+        for _ in range(2):
+            async with self._session.get(url) as response:
+                url_search = _HREF_REGEX.search(await response.text())
+                if not url_search:
+                    raise exceptions.HonAuthenticationError("No URL found in response")
+
+                url = url_search[1]
+                if "ProgressiveLogin" not in url:
+                    break
+
+        async with self._session.get(f"{const.AUTH_API_URL}{url}") as response:
+            self._tokens = _Tokens.from_html(await response.text())
+
+    async def _retrieve_cognito_token(self) -> None:
+        """Retrieve the Cognito token."""
+        await self._ensure_authenticated()
+
+        _LOGGER.debug("Trying to retrieve Cognito token")
+        async with self._session.post(
+            f"{const.API_URL}/auth/v1/login",
+            headers={"id-token": await self.get_id_token()},
+            json=self._device.get(),
+        ) as response:
+            token = (await response.json())["cognitoUser"]["Token"]
+            self._tokens.cognito_token = token
+
+    async def _retrieve_iot_core_token(self) -> None:
+        """Retrieve the IoT Core token."""
+        await self._ensure_authenticated()
+
+        _LOGGER.debug("Trying to retrieve IoT Core token")
+        async with self._session.get(
+            f"{const.API_URL}/auth/v1/introspection",
+            headers={
+                "cognito-token": await self.get_cognito_token(),
+                "id-token": await self.get_id_token(),
+            },
+        ) as response:
+            iot_core_token = (await response.json())["payload"]["tokenSigned"]
+            self._tokens.iot_core_token = iot_core_token
+
+    async def _refresh(self) -> None:
+        async with self._session.post(
+            f"{const.AUTH_API_URL}/services/oauth2/token",
+            params={
+                "client_id": const.CLIENT_ID,
+                "refresh_token": self._tokens.refresh_token,
+                "grant_type": "refresh_token",
+            },
+        ) as response:
+            data = await response.json()
+            self._tokens = _Tokens(**data)
+
+    async def __aenter__(self) -> "HonAuth":
+        await self._resources.enter_async_context(self._session)
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self._resources.aclose()

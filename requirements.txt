@@ -1,4 +1,5 @@
-aiohttp~=3.8.6
+aiohttp~=3.8
+aiomqtt~=2.0.1
+backoff~=2.2
 yarl~=1.8
 typing-extensions~=4.8
-aiomqtt==2.0.1

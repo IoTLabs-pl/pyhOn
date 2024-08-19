@@ -15,6 +15,7 @@ if __name__ == "__main__":
 from pyhon import Hon, HonAPI, diagnose, printer
 
 _LOGGER = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 
 def get_arguments() -> Dict[str, Any]:
@@ -43,7 +44,7 @@ def get_arguments() -> Dict[str, Any]:
 
 
 async def translate(language: str, json_output: bool = False) -> None:
-    async with HonAPI(anonymous=True) as hon:
+    async with HonAPI() as hon:
         keys = await hon.translation_keys(language)
     if json_output:
         print(json.dumps(keys, indent=4))
@@ -100,6 +101,8 @@ async def main() -> None:
                 )
             else:
                 print(diagnose.yaml_export(device))
+
+        await asyncio.sleep(15)
 
 
 def start() -> None:
