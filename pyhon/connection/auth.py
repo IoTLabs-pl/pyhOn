@@ -316,7 +316,7 @@ class HonAuth:
             },
         ) as response:
             data = await response.json()
-            self._tokens = _Tokens(**data)
+            self._tokens = _Tokens.from_dict(data)
 
     async def __aenter__(self) -> "HonAuth":
         await self._resources.enter_async_context(self._session)
