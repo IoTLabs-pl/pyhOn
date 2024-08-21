@@ -10,7 +10,7 @@ with open("requirements.txt", "r", encoding="utf-8") as f:
 
 setup(
     name="pyhOn",
-    version="0.17.7",
+    version="0.17.8-dev",
     author="Andre Basche",
     description="Control hOn devices with python",
     long_description=long_description,
