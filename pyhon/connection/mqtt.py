@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from functools import cached_property, partial
 import json
 import logging
@@ -8,7 +8,7 @@ import pprint
 import random
 import string
 import ssl
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, TYPE_CHECKING, AsyncIterator, cast
 from urllib.parse import urlencode
 
 from aiomqtt import Client, MqttError, ProtocolVersion, Topic
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 _BACKOFF_LOGGER = logging.getLogger(f"{__name__}.backoff")
 _PAHO_LOGGER = logging.getLogger(f"{__name__}.paho")
+
+
+_PAHO_LOGGER.addFilter(lambda record: "PINGRESP" not in record.msg)
+_PAHO_LOGGER.addFilter(lambda record: "PINGREQ" not in record.msg)
 
 
 class _Payload(dict[Any, Any]):
@@ -129,14 +133,14 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
             except asyncio.CancelledError:
                 pass
 
+    @asynccontextmanager
     @backoff.on_exception(
         backoff.expo,
-        MqttError,
+        Exception,
+        max_value=300,
         logger=_BACKOFF_LOGGER,
-        max_time=300,
     )
-    async def loop(self) -> None:
-
+    async def connect_and_subscribe(self) -> AsyncIterator[Client]:
         tls_context = ssl.create_default_context()
         tls_context.set_alpn_protocols([const.MQTT_ALPN_PROTOCOL])
 
@@ -149,13 +153,26 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
             logger=_PAHO_LOGGER,
             tls_context=tls_context,
         ) as client:
+
             await client.subscribe(
                 [s.as_subscription_tuple() for s in self._subscriptions.values()]
             )
+            try:
+                yield client
+            finally:
+                pass
 
-            async for message in client.messages:
-                handler = self._subscriptions[message.topic].handler
-                handler(message)
+    @backoff.on_exception(
+        backoff.constant,
+        MqttError,
+        interval=1,
+        logger=_BACKOFF_LOGGER,
+    )
+    async def loop(self) -> None:
+        while True:
+            async with self.connect_and_subscribe() as client:
+                async for message in client.messages:
+                    self._subscriptions[message.topic].handler(message)
 
-                if self._message_callback:
-                    self._message_callback()
+                    if self._message_callback:
+                        self._message_callback()
