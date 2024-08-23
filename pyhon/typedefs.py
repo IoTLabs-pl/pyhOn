@@ -1,7 +1,5 @@
-from typing import Union, Any, TYPE_CHECKING, Protocol
+from typing import Union, TYPE_CHECKING
 
-import aiohttp
-from yarl import URL
 
 if TYPE_CHECKING:
     from pyhon.parameter.base import HonParameter
@@ -9,12 +7,6 @@ if TYPE_CHECKING:
     from pyhon.parameter.fixed import HonParameterFixed
     from pyhon.parameter.program import HonParameterProgram
     from pyhon.parameter.range import HonParameterRange
-
-
-class Callback(Protocol):  # pylint: disable=too-few-public-methods
-    def __call__(
-        self, url: str | URL, *args: Any, **kwargs: Any
-    ) -> aiohttp.client._RequestContextManager: ...
 
 
 Parameter = Union[

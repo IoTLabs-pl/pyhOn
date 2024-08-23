@@ -1,22 +1,36 @@
 import asyncio
+from dataclasses import dataclass
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from functools import cached_property, partial
 import json
 import logging
 import pprint
-import secrets
+import random
+import string
 import ssl
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, TYPE_CHECKING, AsyncIterator, cast
 from urllib.parse import urlencode
 
-from aiomqtt import Client as aiomqttClient, MqttError, ProtocolVersion, Topic
+from aiomqtt import Client, MqttError, ProtocolVersion, Topic
+from paho.mqtt.subscribeoptions import SubscribeOptions
+import backoff
 from pyhon import const
+
 
 if TYPE_CHECKING:
     from aiomqtt import Message
-    from pyhon import Hon, HonAPI
     from pyhon.appliance import HonAppliance
+    from pyhon.connection.auth import HonAuth
+    from pyhon.connection.device import HonDevice
+    from typing import Callable
 
 _LOGGER = logging.getLogger(__name__)
+_BACKOFF_LOGGER = logging.getLogger(f"{__name__}.backoff")
+_PAHO_LOGGER = logging.getLogger(f"{__name__}.paho")
+
+
+_PAHO_LOGGER.addFilter(lambda record: "PINGRESP" not in record.msg)
+_PAHO_LOGGER.addFilter(lambda record: "PINGREQ" not in record.msg)
 
 
 class _Payload(dict[Any, Any]):
@@ -24,33 +38,46 @@ class _Payload(dict[Any, Any]):
         return pprint.pformat(self)
 
 
-class Client(aiomqttClient):
-    def set_username(self, username: str) -> None:
-        self._client.username_pw_set(username=username)
+@dataclass(frozen=True)
+class Subscription:
+    topic: Topic
+    handler: partial[None]
+    options: SubscribeOptions = SubscribeOptions()
+
+    def as_subscription_tuple(self) -> tuple[str, SubscribeOptions]:
+        return str(self.topic), self.options
 
 
-class MQTTClient:
-    def __init__(self, hon: "Hon", mobile_id: str = const.MOBILE_ID) -> None:
+class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
+    def __init__(
+        self,
+        authenticator: "HonAuth",
+        device: "HonDevice",
+        appliances: "list[HonAppliance]",
+        message_callback: "Callable[[], None] | None" = None,
+    ) -> None:
         self._task: asyncio.Task[None] | None = None
-        self._hon = hon
-        self._mobile_id = mobile_id
-        self._connected_event = asyncio.Event()
 
-    @property
-    def _appliances(self) -> list["HonAppliance"]:
-        return self._hon.appliances
+        self._appliances = appliances
+        self._auth = authenticator
+        self._message_callback = message_callback
 
-    @property
-    def _api(self) -> "HonAPI":
-        return self._hon.api
+        self._client_id = (
+            f"{device.mobile_id}_{''.join(random.choices(string.hexdigits, k=16))}"
+        )
 
-    async def create(self) -> "MQTTClient":
-        self._task = asyncio.create_task(self.loop())
-        await self._connected_event.wait()
-        return self
+    async def _get_mqtt_username(self) -> str:
+        query_params = {
+            "x-amz-customauthorizer-name": const.MQTT_AUTHORIZER,
+            "x-amz-customauthorizer-signature": await self._auth.get_iot_core_token(
+                force=True
+            ),
+            "token": await self._auth.get_id_token(),
+        }
+        return "?" + urlencode(query_params)
 
     @cached_property
-    def _subscription_handlers(self) -> dict[Topic, partial[None]]:
+    def _subscriptions(self) -> dict[Topic, Subscription]:
 
         handlers = {}
 
@@ -64,19 +91,12 @@ class MQTTClient:
 
             for topic in appliance.info.get("topics", {}).get("subscribe", []):
                 topic_parts = topic.split("/")
-                for topic_part, callback in handler_protos.items():
+                for topic_part, handler in handler_protos.items():
                     if topic_part in topic_parts:
-                        handlers[Topic(topic)] = callback
+                        t = Topic(topic)
+                        handlers[t] = Subscription(topic=t, handler=handler)
 
         return handlers
-
-    async def _get_mqtt_username(self) -> str:
-        query_params = {
-            "x-amz-customauthorizer-name": const.AWS_AUTHORIZER,
-            "x-amz-customauthorizer-signature": await self._api.load_aws_token(),
-            "token": self._api.auth.id_token,
-        }
-        return "?" + urlencode(query_params)
 
     @staticmethod
     def _status_handler(appliance: "HonAppliance", message: "Message") -> None:
@@ -93,44 +113,66 @@ class MQTTClient:
     ) -> None:
         appliance.connection = connection_status
 
-    async def loop(self) -> None:
-        delay_min, delay_max = 5, 120
+    def _loop_break(self, task: asyncio.Task[None]) -> None:
+        self._task = None
+        try:
+            _LOGGER.error("MQTT loop broken", exc_info=task.exception())
+        except asyncio.CancelledError:
+            pass
 
-        tls_context = ssl.create_default_context()
-        tls_context.set_alpn_protocols([const.ALPN_PROTOCOL])
+    async def __aenter__(self) -> "MQTTClient":
+        self._task = asyncio.create_task(self.loop())
+        self._task.add_done_callback(self._loop_break)
+        return self
 
-        client = Client(
-            hostname=const.AWS_ENDPOINT,
-            port=const.AWS_PORT,
-            identifier=f"{self._mobile_id}_{secrets.token_hex(8)}",
-            protocol=ProtocolVersion.V5,
-            logger=logging.getLogger(f"{__name__}.paho"),
-            tls_context=tls_context,
-        )
-
-        reconnect_interval = delay_min
-
-        while True:
-            client.set_username(await self._get_mqtt_username())
+    async def __aexit__(self, *args: Any) -> None:
+        if self._task is not None:
+            self._task.cancel()
             try:
-                async with client:
-                    self._connected_event.set()
-                    reconnect_interval = delay_min
+                await self._task
+            except asyncio.CancelledError:
+                pass
 
-                    for topic in self._subscription_handlers:
-                        await client.subscribe(str(topic))
+    @asynccontextmanager
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_value=300,
+        logger=_BACKOFF_LOGGER,
+    )
+    async def connect_and_subscribe(self) -> AsyncIterator[Client]:
+        tls_context = ssl.create_default_context()
+        tls_context.set_alpn_protocols([const.MQTT_ALPN_PROTOCOL])
 
-                    async for message in client.messages:
-                        handler = self._subscription_handlers[message.topic]
+        async with Client(
+            hostname=const.MQTT_ENDPOINT,
+            port=const.MQTT_PORT,
+            identifier=self._client_id,
+            username=await self._get_mqtt_username(),
+            protocol=ProtocolVersion.V5,
+            logger=_PAHO_LOGGER,
+            tls_context=tls_context,
+        ) as client:
 
-                        handler(message)
+            await client.subscribe(
+                [s.as_subscription_tuple() for s in self._subscriptions.values()]
+            )
+            try:
+                yield client
+            finally:
+                pass
 
-                        self._hon.notify()
-            except MqttError:
-                self._connected_event.clear()
-                _LOGGER.warning(
-                    "Connection to MQTT broker lost. Reconnecting in %s seconds",
-                    reconnect_interval,
-                )
-                await asyncio.sleep(reconnect_interval)
-                reconnect_interval = min(reconnect_interval * 2, delay_max)
+    @backoff.on_exception(
+        backoff.constant,
+        MqttError,
+        interval=1,
+        logger=_BACKOFF_LOGGER,
+    )
+    async def loop(self) -> None:
+        while True:
+            async with self.connect_and_subscribe() as client:
+                async for message in client.messages:
+                    self._subscriptions[message.topic].handler(message)
+
+                    if self._message_callback:
+                        self._message_callback()
