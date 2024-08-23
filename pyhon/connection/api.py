@@ -5,6 +5,7 @@ from pathlib import Path
 from pprint import pformat
 from types import TracebackType
 from typing import Any, cast, no_type_check
+import sys
 
 from aiohttp import ClientSession
 from typing_extensions import Self
@@ -16,9 +17,9 @@ from pyhon.connection.handler.anonym import AnonymousSessionWrapper
 from pyhon.connection.handler.hon import DataSessionWrapper
 from pyhon.connection.auth import HonAuth
 
-try:
+if sys.version_info >= (3, 11):
     from datetime import datetime, UTC
-except ImportError:
+else:
     from datetime import datetime, timezone
 
     UTC = timezone.utc
