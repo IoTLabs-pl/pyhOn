@@ -1,7 +1,6 @@
 import json
 from contextlib import AsyncExitStack
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from pprint import pformat
 from types import TracebackType
@@ -16,6 +15,13 @@ from pyhon.connection.device import HonDevice
 from pyhon.connection.handler.anonym import AnonymousSessionWrapper
 from pyhon.connection.handler.hon import DataSessionWrapper
 from pyhon.connection.auth import HonAuth
+
+try:
+    from datetime import datetime, UTC
+except ImportError:
+    from datetime import datetime, timezone
+
+    UTC = timezone.utc
 
 _LOGGER = logging.getLogger(__name__)
 
