@@ -8,16 +8,19 @@ with open("README.md", "r", encoding="utf-8") as f:
 with open("requirements.txt", "r", encoding="utf-8") as f:
     install_requires = f.read().splitlines()
 
+with open("pyhon/__version__.py", "r", encoding="utf-8") as f:
+    _, _, version = f.read().partition("=")
+    version = version.strip().strip("'\"")
+
 setup(
     name="pyhOn",
-    version="0.17.8-dev",
-    author="Andre Basche",
+    version=version,
+    author="Kuba Sawulski",
     description="Control hOn devices with python",
     long_description=long_description,
     long_description_content_type="text/markdown",
     project_urls={
-        "GitHub": "https://github.com/Andre0512/pyhOn",
-        "PyPI": "https://pypi.org/project/pyhOn",
+        "GitHub": "https://github.com/IoTLabs-pl/pyhOn",
     },
     license="MIT",
     platforms="any",
