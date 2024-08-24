@@ -14,7 +14,7 @@ from typing import Any, Literal
 from aiohttp import ClientSession, ClientResponse
 
 
-# from pyhon import const
+from pyhon import const
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,13 +33,13 @@ SessionWrapperMethod = Literal["GET", "POST"]
 
 class SessionWrapper:
     __MAX_HISTORY_LEN = 15
-    _HEADERS = {"User-Agent": "const.USER_AGENT"}
+    _HEADERS = {"User-Agent": const.USER_AGENT}
 
     def __init__(self, session: ClientSession | None = None) -> None:
 
         self._resources = AsyncExitStack()
         self._history: deque[ResponseWrapper] = deque(maxlen=self.__MAX_HISTORY_LEN)
-        self._history_tracking_requests = 0
+        self._history_tracking = False
         self._session = session
 
     async def _extra_headers(self) -> dict[str, str]:
@@ -48,16 +48,17 @@ class SessionWrapper:
     @property
     @contextmanager
     def session_history_tracker(self) -> Generator[None, None, None]:
-        self._history_tracking_requests += 1
-        try:
+        if self._history_tracking:
             yield
-        except Exception as e:
-            self._history_tracking_requests -= 1
-            if self._history_tracking_requests == 1:
-                self._log_history(str(e), flush=True)
-            raise
-
-        self._history_tracking_requests -= 1
+        else:
+            self._history_tracking = True
+            try:
+                yield
+            except Exception as e:
+                self._log_history(str(e))
+                raise
+            finally:
+                self._history_tracking = False
 
     @asynccontextmanager
     async def _request(
