@@ -307,16 +307,23 @@ class HonAuth:
             self._tokens.iot_core_token = iot_core_token
 
     async def _refresh(self) -> None:
-        async with self._session.post(
-            f"{const.AUTH_API_URL}/services/oauth2/token",
-            params={
-                "client_id": const.CLIENT_ID,
-                "refresh_token": self._tokens.refresh_token,
-                "grant_type": "refresh_token",
-            },
-        ) as response:
-            data = await response.json()
-            self._tokens = _Tokens.from_dict(data)
+        try:
+            async with self._session.post(
+                f"{const.AUTH_API_URL}/services/oauth2/token",
+                params={
+                    "client_id": const.CLIENT_ID,
+                    "refresh_token": self._tokens.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            ) as response:
+                data = await response.json()
+                self._tokens = _Tokens.from_dict(data)
+        except aiohttp.ClientResponseError as e:
+            _LOGGER.warning(
+                "Failed to obtain access token with refresh token: [%s] %s",
+                e.status,
+                e.message,
+            )
 
     async def __aenter__(self) -> "HonAuth":
         await self._resources.enter_async_context(self._session)
