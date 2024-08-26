@@ -7,7 +7,7 @@ from types import TracebackType
 from typing import Any, cast, no_type_check
 import sys
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientResponseError
 from typing_extensions import Self
 
 from pyhon import const, exceptions
@@ -173,16 +173,20 @@ class HonAPI:
             return {}
 
     async def load_maintenance(self, appliance: HonAppliance) -> dict[str, Any]:
+        try:
 
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/maintenance-cycle",
-            params={"macAddress": appliance.mac_address},
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(dict[str, Any], payload)
+            async with self._session.get(
+                f"{const.API_URL}/commands/v1/maintenance",
+                params={"macAddress": appliance.mac_address},
+            ) as response:
+                result = await response.json()
+                if result and (payload := result.get("payload")):
+                    return cast(dict[str, Any], payload)
 
-            return {}
+        except ClientResponseError:
+            pass
+
+        return {}
 
     async def send_command(
         self,
