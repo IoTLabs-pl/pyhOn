@@ -173,18 +173,13 @@ class HonAPI:
             return {}
 
     async def load_maintenance(self, appliance: HonAppliance) -> dict[str, Any]:
-        try:
-
-            async with self._session.get(
-                f"{const.API_URL}/commands/v1/maintenance",
+        async with self._session.get(
+                f"{const.API_URL}/commands/v1/maintenance-cycle",
                 params={"macAddress": appliance.mac_address},
-            ) as response:
-                result = await response.json()
-                if result and (payload := result.get("payload")):
-                    return cast(dict[str, Any], payload)
-
-        except ClientResponseError:
-            pass
+        ) as response:
+            result = await response.json()
+            if result and (payload := result.get("payload")):
+                return cast(dict[str, Any], payload)
 
         return {}
 
