@@ -2,12 +2,11 @@ import json
 from contextlib import AsyncExitStack
 import logging
 from pathlib import Path
-from pprint import pformat
 from types import TracebackType
 from typing import Any, cast, no_type_check
 import sys
 
-from aiohttp import ClientSession, ClientResponseError
+from aiohttp import ClientSession
 from typing_extensions import Self
 
 from pyhon import const, exceptions
@@ -65,166 +64,19 @@ class HonAPI:
     ) -> None:
         await self._resources.aclose()
 
-    async def load_appliances(self) -> list[dict[str, Any]]:
-        async with self._session.get(f"{const.API_URL}/commands/v1/appliance") as resp:
+    async def load_any_data(
+        self, url: str, params: dict[str, Any] = None, response_field: str = "payload"
+    ) -> dict[str, Any]:
+        async with self._session.get(url, params=params) as resp:
             result = await resp.json()
-            if result and (payload := result.get("payload")):
-                return cast(list[dict[str, Any]], payload.get("appliances", []))
-            return []
-
-    async def load_commands(self, appliance: HonAppliance) -> dict[str, Any]:
-        params: dict[str, str | int] = {
-            "applianceType": appliance.appliance_type,
-            "applianceModelId": appliance.appliance_model_id,
-            "macAddress": appliance.mac_address,
-            "os": const.OS,
-            "appVersion": const.APP_VERSION,
-            "code": appliance.code,
-        }
-        # TODO: Check if this is correct
-        if firmware_id := appliance.info.get("eepromId"):
-            params["firmwareId"] = firmware_id
-        if firmware_version := appliance.info.get("fwVersion"):
-            params["fwVersion"] = firmware_version
-        if series := appliance.info.get("series"):
-            params["series"] = series
-
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/retrieve", params=params
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                if payload.get("resultCode") == "0":
-                    return cast(dict[str, Any], payload)
-
-            return {}
-
-    async def load_command_history(
-        self, appliance: HonAppliance
-    ) -> list[dict[str, Any]]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/appliance/{appliance.mac_address}/history"
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(list[dict[str, Any]], payload.get("history", []))
-
-            return []
-
-    async def load_favourites(self, appliance: HonAppliance) -> list[dict[str, Any]]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/appliance/{appliance.mac_address}/favourite"
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(list[dict[str, Any]], payload.get("favourites", []))
-
-            return []
-
-    async def load_last_activity(self, appliance: HonAppliance) -> dict[str, Any]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/retrieve-last-activity",
-            params={"macAddress": appliance.mac_address},
-        ) as response:
-            result = await response.json()
-            if result and (attributes := result.get("attributes")):
-                return cast(dict[str, Any], attributes)
-
-        return {}
-
-    async def load_appliance_data(self, appliance: HonAppliance) -> dict[str, Any]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/appliance-model",
-            params={"code": appliance.code, "macAddress": appliance.mac_address},
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(dict[str, Any], payload.get("applianceModel", {}))
-
-        return {}
-
-    async def load_attributes(self, appliance: HonAppliance) -> dict[str, Any]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/context",
-            params={
-                "macAddress": appliance.mac_address,
-                "applianceType": appliance.appliance_type,
-                "category": "CYCLE",
-            },
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
+            if result and (payload := result.get(response_field)):
                 return cast(dict[str, Any], payload)
-
             return {}
 
-    async def load_statistics(self, appliance: HonAppliance) -> dict[str, Any]:
-        async with self._session.get(
-            f"{const.API_URL}/commands/v1/statistics",
-            params={
-                "macAddress": appliance.mac_address,
-                "applianceType": appliance.appliance_type,
-            },
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(dict[str, Any], payload)
-
-            return {}
-
-    async def load_maintenance(self, appliance: HonAppliance) -> dict[str, Any]:
-        try:
-
-            async with self._session.get(
-                f"{const.API_URL}/commands/v1/maintenance",
-                params={"macAddress": appliance.mac_address},
-            ) as response:
-                result = await response.json()
-                if result and (payload := result.get("payload")):
-                    return cast(dict[str, Any], payload)
-
-        except ClientResponseError:
-            pass
-
-        return {}
-
-    async def send_command(
-        self,
-        appliance: HonAppliance,
-        command: str,
-        parameters: dict[str, Any],
-        ancillary_parameters: dict[str, Any],
-        program_name: str = "",
-    ) -> bool:
-        # TODO: Check if this is correct (non Zulu Specifier)
-        now = datetime.now(UTC).isoformat(timespec="milliseconds")
-        data: dict[str, Any] = {
-            "macAddress": appliance.mac_address,
-            "timestamp": now,
-            "commandName": command,
-            "transactionId": f"{appliance.mac_address}_{now}",
-            "applianceOptions": appliance.options,
-            "device": self._device.get(mobile=True),
-            "attributes": {
-                "channel": "mobileApp",
-                "origin": "standardProgram",
-                "energyLabel": "0",
-            },
-            "ancillaryParameters": ancillary_parameters,
-            "parameters": parameters,
-            "applianceType": appliance.appliance_type,
-        }
-        if command == "startProgram" and program_name:
-            data |= {"programName": program_name.upper()}
-
-        async with self._session.post(
-            f"{const.API_URL}/commands/v1/send", json=data
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(bool, payload.get("resultCode") == "0")
-
-            raise exceptions.ApiError("Error sending command", pformat(data))
+    async def load_appliances_data(self) -> list[dict[str, Any]]:
+        return (await self.load_any_data(f"{const.API_URL}/commands/v1/appliance")).get(
+            "appliances", []
+        )
 
     async def appliance_configuration(self) -> dict[str, Any]:
         async with self._anonymous_session.get(

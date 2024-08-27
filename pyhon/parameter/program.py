@@ -43,14 +43,11 @@ class HonParameterProgram(HonParameterEnum):
     def ids(self) -> Dict[int, str]:
         values: Dict[int, str] = {}
         for name, parameter in self._programs.items():
-            if "iot_" in name:
-                continue
-            if not parameter.parameters.get("prCode"):
-                continue
-            if (fav := parameter.parameters.get("favourite")) and fav.value == "1":
-                continue
-            values[int(parameter.parameters["prCode"].value)] = name
+            if "iot_" not in name:
+                if parameter.parameters.get("prCode"):
+                    if (
+                        not (fav := parameter.parameters.get("favourite"))
+                        or fav.value != "1"
+                    ):
+                        values[int(parameter.parameters["prCode"].value)] = name
         return dict(sorted(values.items()))
-
-    def set_value(self, value: str) -> None:
-        self._value = value

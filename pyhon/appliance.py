@@ -1,19 +1,28 @@
 import importlib
+import json
 import logging
 import re
+import sys
+from pprint import pformat
+
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, Any, TYPE_CHECKING, List, TypeVar, overload
+from typing import Optional, Dict, Any, TYPE_CHECKING, List, TypeVar, overload, cast
 
-from pyhon import diagnose, exceptions
+from pyhon import const, diagnose, exceptions
 from pyhon.appliances.base import ApplianceBase
 from pyhon.attributes import HonAttribute
 from pyhon.command_loader import HonCommandLoader
 from pyhon.commands import HonCommand
 from pyhon.parameter.base import HonParameter
-from pyhon.parameter.enum import HonParameterEnum
 from pyhon.parameter.range import HonParameterRange
-from pyhon.typedefs import Parameter
+
+if sys.version_info >= (3, 11):
+    from datetime import datetime, UTC
+else:
+    from datetime import datetime, timezone
+
+    UTC = timezone.utc
 
 if TYPE_CHECKING:
     from pyhon import HonAPI
@@ -23,17 +32,34 @@ _LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+MINIMAL_UPDATE_INTERVAL = 5
+
+
+class throttle:
+    def __init__(self, func) -> None:
+        self.delay = timedelta(seconds=MINIMAL_UPDATE_INTERVAL)
+        self.last_call = datetime.min
+        self.func = func
+
+    def __call__(self, *args, force=False, **kwargs):
+        now = datetime.now()
+        if self.last_call + self.delay < now or force:
+            self.last_call = now
+            return self.func(*args, **kwargs)
+
+
 # pylint: disable=too-many-public-methods,too-many-instance-attributes
 class HonAppliance:
-    _MINIMAL_UPDATE_INTERVAL = 5  # seconds
 
     def __init__(
-        self, api: Optional["HonAPI"], info: Dict[str, Any], zone: int = 0
+        self, api: "HonAPI", appliance_data: Dict[str, Any], zone: int = 0
     ) -> None:
-        if attributes := info.get("attributes"):
-            info["attributes"] = {v["parName"]: v["parValue"] for v in attributes}
-        self._info: Dict[str, Any] = info
-        self._api: Optional[HonAPI] = api
+        if attributes := appliance_data.get("attributes"):
+            appliance_data["attributes"] = {
+                v["parName"]: v["parValue"] for v in attributes
+            }
+        self._data: Dict[str, Any] = appliance_data
+        self._api = api
         self._appliance_model: Dict[str, Any] = {}
 
         self._commands: Dict[str, HonCommand] = {}
@@ -41,9 +67,8 @@ class HonAppliance:
         self._attributes: Dict[str, Any] = {}
         self._zone: int = zone
         self._additional_data: Dict[str, Any] = {}
-        self._last_update: Optional[datetime] = None
         self._default_setting = HonParameter("", {}, "")
-        self._connection = (
+        self.connection = (
             not self._attributes.get("lastConnEvent", {}).get("category", "")
             == "DISCONNECTED"
         )
@@ -55,10 +80,28 @@ class HonAppliance:
         except ModuleNotFoundError:
             self._extra = None
 
+    @classmethod
+    async def create_from_data(cls, api, appliance_data):
+        """Create appliance objects from API data.
+        There may be multiple appliances in the data if zones are present.
+        """
+        for zone in range(int(appliance_data.get("zone", "1"))):
+            if appliance_data.get("macAddress", ""):
+                appliance = cls(api, appliance_data, zone=zone)
+                try:
+                    await appliance.load_commands()
+                    await appliance.load_attributes()
+                    await appliance.load_statistics()
+                except (KeyError, ValueError, IndexError) as error:
+                    _LOGGER.exception(error)
+                    _LOGGER.error("Device data - %s", appliance_data)
+                finally:
+                    yield appliance
+
     def _get_nested_item(self, item: str) -> Any:
         result: List[Any] | Dict[str, Any] = self.data
         for key in item.split("."):
-            if all(k in "0123456789" for k in key) and isinstance(result, list):
+            if key.isdecimal() and isinstance(result, list):
                 result = result[int(key)]
             elif isinstance(result, dict):
                 result = result[key]
@@ -89,30 +132,22 @@ class HonAppliance:
 
     def _check_name_zone(self, name: str, frontend: bool = True) -> str:
         zone = " Z" if frontend else "_z"
-        attribute: str = self._info.get(name, "")
+        attribute: str = self._data.get(name, "")
         if attribute and self._zone:
             return f"{attribute}{zone}{self._zone}"
         return attribute
 
     @property
-    def connection(self) -> bool:
-        return self._connection
-
-    @connection.setter
-    def connection(self, connection: bool) -> None:
-        self._connection = connection
-
-    @property
     def appliance_model_id(self) -> str:
-        return str(self._info.get("applianceModelId", ""))
+        return str(self._data.get("applianceModelId", ""))
 
     @property
     def appliance_type(self) -> str:
-        return str(self._info.get("applianceTypeName", ""))
+        return str(self._data.get("applianceTypeName", ""))
 
     @property
     def mac_address(self) -> str:
-        return str(self.info.get("macAddress", ""))
+        return str(self._data.get("macAddress", ""))
 
     @property
     def unique_id(self) -> str:
@@ -129,7 +164,7 @@ class HonAppliance:
     @property
     def brand(self) -> str:
         brand = self._check_name_zone("brand")
-        return brand[0].upper() + brand[1:]
+        return brand.capitalize()
 
     @property
     def nick_name(self) -> str:
@@ -140,15 +175,15 @@ class HonAppliance:
 
     @property
     def code(self) -> str:
-        code: str = self.info.get("code", "")
-        if code:
+        if code := self._data.get("code"):
             return code
+
         serial_number: str = self.info.get("serialNumber", "")
         return serial_number[:8] if len(serial_number) < 18 else serial_number[:11]
 
     @property
     def model_id(self) -> int:
-        return int(self._info.get("applianceModelId", 0))
+        return int(self._data.get("applianceModelId", 0))
 
     @property
     def options(self) -> Dict[str, Any]:
@@ -168,7 +203,7 @@ class HonAppliance:
 
     @property
     def info(self) -> Dict[str, Any]:
-        return self._info
+        return self._data
 
     @property
     def additional_data(self) -> Dict[str, Any]:
@@ -178,53 +213,18 @@ class HonAppliance:
     def zone(self) -> int:
         return self._zone
 
-    @property
-    def api(self) -> "HonAPI":
-        """api connection object"""
-        if self._api is None:
-            raise exceptions.NoAuthenticationException("Missing hOn login")
-        return self._api
-
-    async def load_commands(self) -> None:
-        command_loader = HonCommandLoader(self.api, self)
-        await command_loader.load_commands()
-        self._commands = command_loader.commands
-        self._additional_data = command_loader.additional_data
-        self._appliance_model = command_loader.appliance_data
-        self.sync_params_to_command("settings")
-
-    async def load_attributes(self) -> None:
-        attributes = await self.api.load_attributes(self)
-        for name, values in attributes.pop("shadow", {}).get("parameters", {}).items():
-            if name in self._attributes.get("parameters", {}):
-                self._attributes["parameters"][name].update(values)
-            else:
-                self._attributes.setdefault("parameters", {})[name] = HonAttribute(
-                    values
-                )
-        self._attributes |= attributes
-        if self._extra:
-            self._attributes = self._extra.attributes(self._attributes)
-
-    async def load_statistics(self) -> None:
-        self._statistics = await self.api.load_statistics(self)
-        self._statistics |= await self.api.load_maintenance(self)
-
+    @throttle
     async def update(self, force: bool = False) -> None:
-        now = datetime.now()
-        min_age = now - timedelta(seconds=self._MINIMAL_UPDATE_INTERVAL)
-        if force or not self._last_update or self._last_update < min_age:
-            self._last_update = now
-            await self.load_attributes()
-            self.sync_params_to_command("settings")
+        await self.load_attributes()
+        self.sync_params_to_command("settings")
 
     @property
     def command_parameters(self) -> Dict[str, Dict[str, str | float]]:
         return {n: c.parameter_value for n, c in self._commands.items()}
 
     @property
-    def settings(self) -> Dict[str, Parameter]:
-        result: Dict[str, Parameter] = {}
+    def settings(self) -> Dict[str, HonParameter]:
+        result: Dict[str, HonParameter] = {}
         for name, command in self._commands.items():
             for key in command.setting_keys:
                 setting = command.settings.get(key, self._default_setting)
@@ -235,11 +235,11 @@ class HonAppliance:
 
     @property
     def available_settings(self) -> List[str]:
-        result = []
-        for name, command in self._commands.items():
-            for key in command.setting_keys:
-                result.append(f"{name}.{key}")
-        return result
+        return [
+            f"{name}.{key}"
+            for name, command in self._commands.items()
+            for key in command.setting_keys
+        ]
 
     @property
     def data(self) -> Dict[str, Any]:
@@ -270,22 +270,19 @@ class HonAppliance:
                 )
 
     def sync_params_to_command(self, command_name: str) -> None:
-        if not (command := self.commands.get(command_name)):
-            return
-        for key in command.setting_keys:
-            if (
-                new := self.attributes.get("parameters", {}).get(key)
-            ) is None or new.value == "":
-                continue
-            setting = command.settings[key]
-            try:
-                if not isinstance(setting, HonParameterRange):
-                    command.settings[key].value = str(new.value)
-                else:
-                    command.settings[key].value = float(new.value)
-            except ValueError as error:
-                _LOGGER.info("Can't set %s - %s", key, error)
-                continue
+        if command := self.commands.get(command_name):
+            for key in command.setting_keys:
+                if (
+                    new := self.attributes.get("parameters", {}).get(key)
+                ) is not None and new.value != "":
+                    setting = command.settings[key]
+                    try:
+                        if not isinstance(setting, HonParameterRange):
+                            command.settings[key].value = str(new.value)
+                        else:
+                            command.settings[key].value = float(new.value)
+                    except ValueError as error:
+                        _LOGGER.info("Can't set %s - %s", key, error)
 
     def sync_command(
         self,
@@ -293,34 +290,160 @@ class HonAppliance:
         target: Optional[List[str] | str] = None,
         to_sync: Optional[List[str] | bool] = None,
     ) -> None:
-        base: Optional[HonCommand] = self.commands.get(main)
-        if not base:
-            return
-        for command, data in self.commands.items():
-            if command == main or target and command not in target:
-                continue
+        if base := self.commands.get(main):
+            for command, data in self.commands.items():
+                if command != main and (not target or command in target):
+                    for name, target_param in data.parameters.items():
+                        if base_param := base.parameters.get(name):
+                            if to_sync and (
+                                (isinstance(to_sync, list) and name not in to_sync)
+                                or not base_param.mandatory
+                            ):
+                                continue
+                            target_param.sync(base_param)
 
-            for name, target_param in data.parameters.items():
-                if not (base_param := base.parameters.get(name)):
-                    continue
-                if to_sync and (
-                    (isinstance(to_sync, list) and name not in to_sync)
-                    or not base_param.mandatory
-                ):
-                    continue
-                self.sync_parameter(base_param, target_param)
+    async def load_commands(self) -> dict[str, Any]:
+        params: dict[str, str | int] = {
+            "os": const.OS,
+            "appVersion": const.APP_VERSION,
+            "applianceType": self.appliance_type,
+            "applianceModelId": self.appliance_model_id,
+            "macAddress": self.mac_address,
+            "code": self.code,
+        }
+        if firmware_id := self.info.get("eepromId"):
+            params["firmwareId"] = firmware_id
+        if firmware_version := self.info.get("fwVersion"):
+            params["fwVersion"] = firmware_version
+        if series := self.info.get("series"):
+            params["series"] = series
 
-    def sync_parameter(self, main: Parameter, target: Parameter) -> None:
-        if isinstance(main, HonParameterRange) and isinstance(
-            target, HonParameterRange
-        ):
-            target.max = main.max
-            target.min = main.min
-            target.step = main.step
-        elif isinstance(target, HonParameterRange):
-            target.max = int(main.value)
-            target.min = int(main.value)
-            target.step = 1
-        elif isinstance(target, HonParameterEnum):
-            target.values = main.values
-        target.value = main.value
+        payload = await self._api.load_any_data(
+            f"{const.API_URL}/commands/v1/retrieve", params=params
+        )
+
+        if payload.get("resultCode") == "0":
+            payload = cast(dict[str, Any], payload)
+
+            self._appliance_model = payload.pop("applianceModel", {})
+
+            additional_keys = {k for k, v in payload.items() if not isinstance(v, dict)}
+
+            self._additional_data = {
+                k: v for k, v in payload.items() if k in additional_keys
+            }
+            payload = {k: v for k, v in payload.items() if k not in additional_keys}
+
+            command_loader = HonCommandLoader(
+                self,
+                payload,
+                await self.load_command_history(),
+                await self.load_favourites(),
+            )
+            self._commands = command_loader.commands
+            self.sync_params_to_command("settings")
+
+    async def load_command_history(self) -> list[dict[str, Any]]:
+        return (
+            await self._api.load_any_data(
+                f"{const.API_URL}/commands/v1/appliance/{self.mac_address}/history"
+            )
+        ).get("history", [])
+
+    async def load_favourites(self) -> list[dict[str, Any]]:
+        return (
+            await self._api.load_any_data(
+                f"{const.API_URL}/commands/v1/appliance/{self.mac_address}/favourite"
+            )
+        ).get("favourites", [])
+
+    # TODO: Method not used
+    async def load_last_activity(self) -> dict[str, Any]:
+        return await self._api.load_any_data(
+            f"{const.API_URL}/commands/v1/retrieve-last-activity",
+            params={"macAddress": self.mac_address},
+            response_field="attributes",
+        )
+
+    # TODO: Method not used
+    async def load_appliance_data(self) -> dict[str, Any]:
+        return (
+            await self._api.load_any_data(
+                f"{const.API_URL}/commands/v1/appliance-model",
+                params={"code": self.code, "macAddress": self.mac_address},
+            )
+        ).get("applianceModel", {})
+
+    async def load_attributes(self) -> dict[str, Any]:
+        payload = await self._api.load_any_data(
+            f"{const.API_URL}/commands/v1/context",
+            params={
+                "macAddress": self.mac_address,
+                "applianceType": self.appliance_type,
+                "category": "CYCLE",
+            },
+        )
+
+        for name, values in payload.pop("shadow", {}).get("parameters", {}).items():
+            if name in self._attributes.get("parameters", {}):
+                self._attributes["parameters"][name].update(values)
+            else:
+                self._attributes.setdefault("parameters", {})[name] = HonAttribute(
+                    values
+                )
+        self._attributes |= payload
+        if self._extra:
+            self._attributes = self._extra.attributes(self._attributes)
+
+    async def load_statistics(self) -> dict[str, Any]:
+        statistics = await self._api.load_any_data(
+            f"{const.API_URL}/commands/v1/statistics",
+            params={
+                "macAddress": self.mac_address,
+                "applianceType": self.appliance_type,
+            },
+        )
+
+        maintenance = await self._api.load_any_data(
+            f"{const.API_URL}/commands/v1/maintenance-cycle",
+            params={"macAddress": self.mac_address},
+        )
+
+        self._statistics = {**statistics, **maintenance}
+
+    async def send_command(
+        self,
+        command: str,
+        parameters: dict[str, Any],
+        ancillary_parameters: dict[str, Any],
+        program_name: str = "",
+    ) -> bool:
+        # TODO: Check if this is correct (non Zulu Specifier)
+        now = datetime.now(UTC).isoformat(timespec="milliseconds")
+        data: dict[str, Any] = {
+            "macAddress": self.mac_address,
+            "timestamp": now,
+            "commandName": command,
+            "transactionId": f"{self.mac_address}_{now}",
+            "applianceOptions": self.options,
+            "device": self._device.get(mobile=True),
+            "attributes": {
+                "channel": "mobileApp",
+                "origin": "standardProgram",
+                "energyLabel": "0",
+            },
+            "ancillaryParameters": ancillary_parameters,
+            "parameters": parameters,
+            "applianceType": self.appliance_type,
+        }
+        if command == "startProgram" and program_name:
+            data |= {"programName": program_name.upper()}
+
+        async with self._session.post(
+            f"{const.API_URL}/commands/v1/send", json=data
+        ) as response:
+            result = await response.json()
+            if result and (payload := result.get("payload")):
+                return cast(bool, payload.get("resultCode") == "0")
+
+            raise exceptions.ApiError("Error sending command", pformat(data))

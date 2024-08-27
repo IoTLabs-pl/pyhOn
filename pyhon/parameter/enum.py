@@ -1,6 +1,9 @@
-from typing import Dict, Any, List
+from typing import Any, TYPE_CHECKING
 
 from pyhon.parameter.base import HonParameter
+
+if TYPE_CHECKING:
+    from pyhon.rules import HonRule
 
 
 def clean_value(value: str | float) -> str:
@@ -8,11 +11,11 @@ def clean_value(value: str | float) -> str:
 
 
 class HonParameterEnum(HonParameter):
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self._default: str | float = ""
         self._value: str | float = ""
-        self._values: List[str] = []
+        self._values: list[str] = []
         self._set_attributes()
         if self._default and clean_value(self._default.strip("[]")) not in self.values:
             self._values.append(self._default)
@@ -27,12 +30,23 @@ class HonParameterEnum(HonParameter):
         return f"{self.__class__} (<{self.key}> {self.values})"
 
     @property
-    def values(self) -> List[str]:
+    def values(self) -> list[str]:
         return [clean_value(value) for value in self._values]
 
     @values.setter
-    def values(self, values: List[str]) -> None:
+    def values(self, values: list[str]) -> None:
         self._values = values
+
+    def apply_fixed_value(self, value: str | float) -> None:
+        if set(self.values) != {str(value)}:
+            self.values = [str(value)]
+            super().apply_fixed_value(value)
+
+    def apply_rule(self, rule: "HonRule") -> None:
+        if enum_values := rule.param_data.get("enumValues"):
+            self.values = enum_values.split("|")
+        if default_value := rule.param_data.get("defaultValue"):
+            self.value = default_value
 
     @property
     def intern_value(self) -> str:
@@ -49,3 +63,7 @@ class HonParameterEnum(HonParameter):
             self.check_trigger(value)
         else:
             raise ValueError(f"Allowed values: {self._values} But was: {value}")
+
+    def sync(self, other: "HonParameterEnum") -> None:
+        self.values = other.values
+        super().sync(other)

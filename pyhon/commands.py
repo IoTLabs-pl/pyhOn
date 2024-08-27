@@ -9,7 +9,6 @@ from pyhon.parameter.fixed import HonParameterFixed
 from pyhon.parameter.program import HonParameterProgram
 from pyhon.parameter.range import HonParameterRange
 from pyhon.rules import HonRuleSet
-from pyhon.typedefs import Parameter
 
 if TYPE_CHECKING:
     from pyhon import HonAPI
@@ -32,15 +31,15 @@ class HonCommand:
         self._appliance: "HonAppliance" = appliance
         self._categories: Optional[Dict[str, "HonCommand"]] = categories
         self._category_name: str = category_name
-        self._parameters: Dict[str, Parameter] = {}
+        self._parameters: Dict[str, HonParameter] = {}
         self._data: Dict[str, Any] = {}
         self._rules: List[HonRuleSet] = []
-        attributes.pop("description", "")
-        attributes.pop("protocolType", "")
+        attributes.pop("description")
+        attributes.pop("protocolType")
         self._load_parameters(attributes)
 
     def __repr__(self) -> str:
-        return f"{self._name} command"
+        return f"{self.name} command"
 
     @property
     def name(self) -> str:
@@ -182,23 +181,13 @@ class HonCommand:
             {param for cmd in self.categories.values() for param in cmd.parameters}
         )
 
-    @staticmethod
-    def _more_options(first: Parameter, second: Parameter) -> Parameter:
-        if isinstance(first, HonParameterFixed) and not isinstance(
-            second, HonParameterFixed
-        ):
-            return second
-        if len(second.values) > len(first.values):
-            return second
-        return first
-
     @property
-    def available_settings(self) -> Dict[str, Parameter]:
-        result: Dict[str, Parameter] = {}
+    def available_settings(self) -> Dict[str, HonParameter]:
+        result: Dict[str, HonParameter] = {}
         for command in self.categories.values():
             for name, parameter in command.parameters.items():
                 if name in result:
-                    result[name] = self._more_options(result[name], parameter)
+                    result[name] = result[name].more_options(parameter)
                 else:
                     result[name] = parameter
         return result
@@ -206,3 +195,24 @@ class HonCommand:
     def reset(self) -> None:
         for parameter in self._parameters.values():
             parameter.reset()
+
+    @staticmethod
+    def parseable(data: Dict[str, Any]) -> bool:
+        """Check if dict can be parsed as command"""
+        return (
+            data.get("description") is not None and data.get("protocolType") is not None
+        )
+
+    def update(self, data: dict[str, str | dict]) -> None:
+        """Update command with new data"""
+        for d in data.values():
+            if not isinstance(d, str):
+                for key, value in d.items():
+                    if parameter := self.parameters.get(key):
+                        parameter.value = value
+
+    def set_as_favourite(self):
+        """Set command as favourite"""
+        self.parameters.update(
+            favourite=HonParameterFixed("favourite", {"fixedValue": "1"}, "custom")
+        )

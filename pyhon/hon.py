@@ -1,8 +1,8 @@
 from collections.abc import Callable
 from contextlib import AsyncExitStack
+import json
 import logging
 from pathlib import Path
-from typing import Any
 from types import TracebackType
 
 from aiohttp import ClientSession
@@ -46,33 +46,21 @@ class Hon:
     async def __aenter__(self) -> Self:
         return await self.setup()
 
-    async def _create_appliance(
-        self, appliance_data: dict[str, Any], api: HonAPI, zone: int = 0
-    ) -> None:
-        appliance = HonAppliance(api, appliance_data, zone=zone)
-        if appliance.mac_address == "":
-            return
-        try:
-            await appliance.load_commands()
-            await appliance.load_attributes()
-            await appliance.load_statistics()
-        except (KeyError, ValueError, IndexError) as error:
-            _LOGGER.exception(error)
-            _LOGGER.error("Device data - %s", appliance_data)
-
-        self.appliances.append(appliance)
-
     async def setup(self) -> Self:
         await self._resources.enter_async_context(self._api)
 
-        appliances = await self._api.load_appliances()
-        for appliance in appliances:
-            if (zones := int(appliance.get("zone", "0"))) > 1:
-                for zone in range(zones):
-                    await self._create_appliance(
-                        appliance.copy(), self._api, zone=zone + 1
-                    )
-            await self._create_appliance(appliance, self._api)
+        appliances_data = await self._api.load_appliances_data()
+
+        self.appliances.extend(
+            [
+                appliance
+                for appliance_data in appliances_data
+                async for appliance in HonAppliance.create_from_data(
+                    self._api, appliance_data
+                )
+            ]
+        )
+
         if (
             self._test_data_path
             and (

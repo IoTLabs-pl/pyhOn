@@ -36,6 +36,9 @@ class HonParameter:
         self._value = value
         self.check_trigger(value)
 
+    def apply_fixed_value(self, value: str | float) -> None:
+        self.value = str(value)
+
     @property
     def intern_value(self) -> str:
         return str(self.value)
@@ -96,3 +99,12 @@ class HonParameter:
 
     def reset(self) -> None:
         self._set_attributes()
+
+    def sync(self, other: "HonParameter"):
+        self.value = other.value
+
+    def more_options(self, other: "HonParameter") -> "HonParameter":
+        if len(other.values) > len(self.values):
+            return other
+        
+        return self

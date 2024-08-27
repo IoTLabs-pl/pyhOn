@@ -1,18 +1,14 @@
-class HonAuthenticationError(Exception):
+class pyhOnException(Exception):
     pass
 
 
-class HonNoAuthenticationNeeded(Exception):
+class HonAuthenticationError(pyhOnException):
     pass
 
 
-class NoSessionException(Exception):
+class NoAuthenticationException(pyhOnException):
     pass
 
 
-class NoAuthenticationException(Exception):
-    pass
-
-
-class ApiError(Exception):
+class ApiError(pyhOnException):
     pass

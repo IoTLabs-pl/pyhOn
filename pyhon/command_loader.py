@@ -1,37 +1,31 @@
-import asyncio
 from contextlib import suppress
 from copy import copy
+from functools import cached_property
 from typing import Dict, Any, Optional, TYPE_CHECKING, List
 
 from pyhon.commands import HonCommand
-from pyhon.exceptions import NoAuthenticationException
-from pyhon.parameter.fixed import HonParameterFixed
 from pyhon.parameter.program import HonParameterProgram
 
 if TYPE_CHECKING:
-    from pyhon import HonAPI
     from pyhon.appliance import HonAppliance
 
 
 class HonCommandLoader:
     """Loads and parses hOn command data"""
 
-    def __init__(self, api: "HonAPI", appliance: "HonAppliance") -> None:
-        self._api: "HonAPI" = api
+    def __init__(
+        self,
+        appliance: "HonAppliance",
+        api_commands_data: dict[str, Any],
+        command_history_data: list[dict[str, Any]],
+        favourites_data: list[dict[str, Any]],
+    ) -> None:
         self._appliance: "HonAppliance" = appliance
-        self._api_commands: Dict[str, Any] = {}
-        self._favourites: List[Dict[str, Any]] = []
-        self._command_history: List[Dict[str, Any]] = []
-        self._commands: Dict[str, HonCommand] = {}
-        self._appliance_data: Dict[str, Any] = {}
-        self._additional_data: Dict[str, Any] = {}
 
-    @property
-    def api(self) -> "HonAPI":
-        """api connection object"""
-        if self._api is None:
-            raise NoAuthenticationException("Missing hOn login")
-        return self._api
+        self._api_commands: Dict[str, Any] = api_commands_data
+        self._favourites: List[Dict[str, Any]] = favourites_data
+        self._command_history: List[Dict[str, Any]] = command_history_data
+        self._commands = {}
 
     @property
     def appliance(self) -> "HonAppliance":
@@ -40,67 +34,29 @@ class HonCommandLoader:
 
     @property
     def commands(self) -> Dict[str, HonCommand]:
-        """Get list of hon commands"""
+        """commands dict"""
+        if len(self._commands) == 0:
+            self.parse_commands()
         return self._commands
 
-    @property
-    def appliance_data(self) -> Dict[str, Any]:
-        """Get command appliance data"""
-        return self._appliance_data
-
-    @property
-    def additional_data(self) -> Dict[str, Any]:
-        """Get command additional data"""
-        return self._additional_data
-
-    async def load_commands(self) -> None:
-        """Trigger loading of command data"""
-        await self._load_data()
-        self._appliance_data = self._api_commands.pop("applianceModel", {})
-        self._get_commands()
+    def parse_commands(self) -> Dict[str, HonCommand]:
+        self._commands = {
+            command.name: command
+            for command in (
+                self._parse_command(data, name)
+                for name, data in self._api_commands.items()
+            )
+            if command
+        }
         self._add_favourites()
         self._recover_last_command_states()
-
-    async def _load_commands(self) -> None:
-        self._api_commands = await self._api.load_commands(self._appliance)
-
-    async def _load_favourites(self) -> None:
-        self._favourites = await self._api.load_favourites(self._appliance)
-
-    async def _load_command_history(self) -> None:
-        self._command_history = await self._api.load_command_history(self._appliance)
-
-    async def _load_data(self) -> None:
-        """Callback parallel all relevant data"""
-        await asyncio.gather(
-            *[
-                self._load_commands(),
-                self._load_favourites(),
-                self._load_command_history(),
-            ]
-        )
-
-    @staticmethod
-    def _is_command(data: Dict[str, Any]) -> bool:
-        """Check if dict can be parsed as command"""
-        return (
-            data.get("description") is not None and data.get("protocolType") is not None
-        )
 
     @staticmethod
     def _clean_name(category: str) -> str:
         """Clean up category name"""
         if "PROGRAM" in category:
-            return category.split(".")[-1].lower()
+            return category.rsplit(".", 1)[-1].lower()
         return category
-
-    def _get_commands(self) -> None:
-        """Generates HonCommand dict from api data"""
-        commands = []
-        for name, data in self._api_commands.items():
-            if command := self._parse_command(data, name):
-                commands.append(command)
-        self._commands = {c.name: c for c in commands}
 
     def _parse_command(
         self,
@@ -110,19 +66,17 @@ class HonCommandLoader:
         category_name: str = "",
     ) -> Optional[HonCommand]:
         """Try to create HonCommand object"""
-        if not isinstance(data, dict):
-            self._additional_data[command_name] = data
-            return None
-        if self._is_command(data):
-            return HonCommand(
-                command_name,
-                data,
-                self._appliance,
-                category_name=category_name,
-                categories=categories,
-            )
-        if category := self._parse_categories(data, command_name):
-            return category
+        if isinstance(data, dict):
+            if HonCommand.parseable(data):
+                return HonCommand(
+                    command_name,
+                    data,
+                    self._appliance,
+                    category_name=category_name,
+                    categories=categories,
+                )
+            if category := self._parse_categories(data, command_name):
+                return category
         return None
 
     def _parse_categories(
@@ -170,27 +124,24 @@ class HonCommandLoader:
     def _recover_last_command_states(self) -> None:
         """Set commands to last state"""
         for name, command in self.commands.items():
-            if (last_index := self._get_last_command_index(name)) is None:
-                continue
-            last_command = self._command_history[last_index]
-            parameters = last_command.get("command", {}).get("parameters", {})
-            command = self._set_last_category(command, name, parameters)
-            for key, data in command.settings.items():
-                if parameters.get(key) is None:
-                    continue
-                with suppress(ValueError):
-                    data.value = parameters.get(key)
+            if (last_index := self._get_last_command_index(name)) is not None:
+                last_command = self._command_history[last_index]
+                parameters = last_command.get("command", {}).get("parameters", {})
+                command = self._set_last_category(command, name, parameters)
+                for key, data in command.settings.items():
+                    if parameters.get(key) is not None:
+                        with suppress(ValueError):
+                            data.value = parameters.get(key)
 
     def _add_favourites(self) -> None:
         """Patch program categories with favourites"""
         for favourite in self._favourites:
             name, command_name, base = self._get_favourite_info(favourite)
-            if not base:
-                continue
-            base_command: HonCommand = copy(base)
-            self._update_base_command_with_data(base_command, favourite)
-            self._update_base_command_with_favourite(base_command)
-            self._update_program_categories(command_name, name, base_command)
+            if base:
+                base_command = copy(base)
+                base_command.update(favourite)
+                base_command.set_as_favourite()
+                self._update_program_categories(command_name, name, base_command)
 
     def _get_favourite_info(
         self, favourite: Dict[str, Any]
@@ -202,26 +153,10 @@ class HonCommandLoader:
         base_command = self.commands[command_name].categories.get(program_name)
         return name, command_name, base_command
 
-    def _update_base_command_with_data(
-        self, base_command: HonCommand, command: Dict[str, Any]
-    ) -> None:
-        for data in command.values():
-            if isinstance(data, str):
-                continue
-            for key, value in data.items():
-                if not (parameter := base_command.parameters.get(key)):
-                    continue
-                with suppress(ValueError):
-                    parameter.value = value
-
-    def _update_base_command_with_favourite(self, base_command: HonCommand) -> None:
-        extra_param = HonParameterFixed("favourite", {"fixedValue": "1"}, "custom")
-        base_command.parameters.update(favourite=extra_param)
-
     def _update_program_categories(
         self, command_name: str, name: str, base_command: HonCommand
     ) -> None:
         program = base_command.parameters["program"]
         if isinstance(program, HonParameterProgram):
-            program.set_value(name)
+            program.value = name
         self.commands[command_name].categories[name] = base_command
