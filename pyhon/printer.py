@@ -1,4 +1,4 @@
-from typing import Dict, Any, TYPE_CHECKING, List
+from typing import  Any, TYPE_CHECKING, List
 
 from pyhon.parameter.enum import HonParameterEnum
 from pyhon.parameter.range import HonParameterRange
@@ -53,13 +53,13 @@ def pretty_print(
 
 
 def create_commands(
-    commands: Dict[str, "HonCommand"], concat: bool = False
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+    commands: dict[str, "HonCommand"], concat: bool = False
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for name, command in commands.items():
         for parameter, data in command.available_settings.items():
             if isinstance(data, HonParameterEnum):
-                value: List[str] | Dict[str, str | float] = data.values
+                value: List[str] | dict[str, str | float] = data.values
             elif isinstance(data, HonParameterRange):
                 value = {"min": data.min, "max": data.max, "step": data.step}
             else:
@@ -72,9 +72,9 @@ def create_commands(
 
 
 def create_rules(
-    commands: Dict[str, "HonCommand"], concat: bool = False
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+    commands: dict[str, "HonCommand"], concat: bool = False
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for name, command in commands.items():
         for parameter, data in command.available_settings.items():
             value = data.triggers

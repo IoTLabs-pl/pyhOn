@@ -1,10 +1,10 @@
-from typing import Dict, Any
+from typing import  Any
 
 from pyhon.parameter.base import HonParameter
 
 
 class HonParameterFixed(HonParameter):
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self._value: str | float = ""
         self._set_attributes()

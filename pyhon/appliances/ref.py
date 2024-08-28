@@ -1,25 +1,29 @@
-from typing import Dict, Any
+from typing import Any
 
-from pyhon.appliances.base import ApplianceBase
+from pyhon.appliances.base import HonAppliance
+from pyhon.attributes import HonAttribute
 
 
-class Appliance(ApplianceBase):
-    def attributes(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        data = super().attributes(data)
-        if data["parameters"]["holidayMode"] == "1":
-            data["modeZ1"] = "holiday"
-        elif data["parameters"]["intelligenceMode"] == "1":
-            data["modeZ1"] = "auto_set"
-        elif data["parameters"].get("quickModeZ1") == "1":
-            data["modeZ1"] = "super_cool"
-        else:
-            data["modeZ1"] = "no_mode"
+class RefAppliance(HonAppliance):
+    async def load_attributes(self) -> dict[str, Any]:
+        await super().load_attributes()
+        data = self._attributes
+        params = data["parameters"]
 
-        if data["parameters"].get("quickModeZ2") == "1":
-            data["modeZ2"] = "super_freeze"
-        elif data["parameters"]["intelligenceMode"] == "1":
-            data["modeZ2"] = "auto_set"
-        else:
-            data["modeZ2"] = "no_mode"
+        match params:
+            case {"holidayMode": HonAttribute(value="1")}:
+                data["modeZ1"] = HonAttribute("holiday")
+            case {"intelligenceMode": HonAttribute(value="1")}:
+                data["modeZ1"] = HonAttribute("auto_set")
+            case {"quickModeZ1": HonAttribute(value="1")}:
+                data["modeZ1"] = HonAttribute("super_cool")
+            case _:
+                data["modeZ1"] = HonAttribute("no_mode")
 
-        return data
+        match params:
+            case {"quickModeZ2": HonAttribute(value="1")}:
+                data["modeZ2"] = HonAttribute("super_freeze")
+            case {"intelligenceMode": HonAttribute(value="1")}:
+                data["modeZ2"] = HonAttribute("auto_set")
+            case _:
+                data["modeZ2"] = HonAttribute("no_mode")

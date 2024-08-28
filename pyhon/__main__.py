@@ -6,7 +6,7 @@ import logging
 import sys
 from getpass import getpass
 from pathlib import Path
-from typing import Tuple, Dict, Any
+from typing import Tuple, Any
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,7 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 
-def get_arguments() -> Dict[str, Any]:
+def get_arguments() -> dict[str, Any]:
     """Get parsed arguments."""
     parser = argparse.ArgumentParser(description="pyhOn: Command Line Utility")
     parser.add_argument("-u", "--user", help="user for haier hOn account")
@@ -59,7 +59,7 @@ async def translate(language: str, json_output: bool = False) -> None:
         print(printer.pretty_print(keys))
 
 
-def get_login_data(args: Dict[str, str]) -> Tuple[str, str]:
+def get_login_data(args: dict[str, str]) -> Tuple[str, str]:
     if not (user := args["user"]):
         user = input("User for hOn account: ")
     if not (password := args["password"]):

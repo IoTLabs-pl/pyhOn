@@ -1,21 +1,15 @@
-# pylint: disable=duplicate-code
-from typing import Any, Dict
-
-from pyhon.appliances.base import ApplianceBase
+from pyhon.appliances.base import HonAppliance
+from pyhon.appliances.mixins import MachModeActivityMixin
+from pyhon.parameter.base import HonParameter
 from pyhon.parameter.fixed import HonParameterFixed
 
 
-class Appliance(ApplianceBase):
-    def attributes(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        data = super().attributes(data)
-        if not self.parent.connection:
-            data["parameters"]["machMode"].value = "0"
-        data["active"] = bool(data.get("activity"))
-        data["pause"] = data["parameters"]["machMode"] == "3"
-        return data
+class TDAppliance(MachModeActivityMixin, HonAppliance):
 
-    def settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+    @property
+    def settings(self) -> dict[str, HonParameter]:
+        settings = super().settings
         dry_level = settings.get("startProgram.dryLevel")
         if isinstance(dry_level, HonParameterFixed) and dry_level.value == "11":
-            settings.pop("startProgram.dryLevel", None)
+            settings.pop("startProgram.dryLevel")
         return settings

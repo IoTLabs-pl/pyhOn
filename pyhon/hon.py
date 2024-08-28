@@ -1,24 +1,18 @@
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-import json
-import logging
 from pathlib import Path
 from types import TracebackType
 
 from aiohttp import ClientSession
 from typing_extensions import Self
 
-from pyhon.appliance import HonAppliance
+from pyhon.appliances import HonAppliance
 from pyhon.connection.device import HonDevice
 from pyhon.const import MOBILE_ID
 from pyhon.connection.api import HonAPI, TestAPI
 from pyhon.connection.auth import HonAuth
 from pyhon.connection.mqtt import MQTTClient
 
-_LOGGER = logging.getLogger(__name__)
-
-
-# pylint: disable=too-many-instance-attributes
 class Hon:
     def __init__(
         self,

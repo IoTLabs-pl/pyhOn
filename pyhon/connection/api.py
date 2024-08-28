@@ -1,27 +1,20 @@
+from collections.abc import Sequence
 import json
 from contextlib import AsyncExitStack
 import logging
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast, no_type_check
-import sys
+from typing import Any, Literal, cast, no_type_check
 
 from aiohttp import ClientSession
 from typing_extensions import Self
 
 from pyhon import const, exceptions
-from pyhon.appliance import HonAppliance
+from pyhon.appliances import HonAppliance
 from pyhon.connection.device import HonDevice
 from pyhon.connection.handler.anonym import AnonymousSessionWrapper
 from pyhon.connection.handler.hon import DataSessionWrapper
 from pyhon.connection.auth import HonAuth
-
-if sys.version_info >= (3, 11):
-    from datetime import datetime, UTC
-else:
-    from datetime import datetime, timezone
-
-    UTC = timezone.utc
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,18 +57,37 @@ class HonAPI:
     ) -> None:
         await self._resources.aclose()
 
-    async def load_any_data(
-        self, url: str, params: dict[str, Any] = None, response_field: str = "payload"
-    ) -> dict[str, Any]:
-        async with self._session.get(url, params=params) as resp:
-            result = await resp.json()
-            if result and (payload := result.get(response_field)):
-                return cast(dict[str, Any], payload)
-            return {}
+    async def call(
+        self,
+        endpoint: str,
+        *,
+        params: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        response_path: Sequence[str] = ("payload",),
+    ):
+        result: dict[str, Any] = {}
+        async with self._session._request(
+            "POST" if json else "GET",
+            f"{const.API_URL}/commands/v1/{endpoint}",
+            params=params,
+            json=json,
+        ) as response:
+            result = await response.json()
+            for field in response_path:
+                result = result.get(field, {})
+
+        return result
 
     async def load_appliances_data(self) -> list[dict[str, Any]]:
-        return (await self.load_any_data(f"{const.API_URL}/commands/v1/appliance")).get(
-            "appliances", []
+        return (
+            await self.call(
+                "appliance",
+                response_path=(
+                    "payload",
+                    "appliances",
+                ),
+            )
+            or []
         )
 
     async def appliance_configuration(self) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-from typing import List, TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 from pyhon.parameter.enum import HonParameterEnum
 
@@ -13,10 +13,10 @@ class HonParameterProgram(HonParameterEnum):
         super().__init__(key, {}, group)
         self._command = command
         if "PROGRAM" in command.category:
-            self._value = command.category.split(".")[-1].lower()
+            self._value = command.category.rsplit(".", 1)[-1].lower()
         else:
             self._value = command.category
-        self._programs: Dict[str, "HonCommand"] = command.categories
+        self._programs: dict[str, "HonCommand"] = command.categories
         self._typology: str = "enum"
 
     @property
@@ -31,17 +31,12 @@ class HonParameterProgram(HonParameterEnum):
             raise ValueError(f"Allowed values: {self.values} But was: {value}")
 
     @property
-    def values(self) -> List[str]:
-        values = [v for v in self._programs if all(f not in v for f in self._FILTER)]
-        return sorted(values)
-
-    @values.setter
-    def values(self, values: List[str]) -> None:
-        raise ValueError("Cant set values {values}")
+    def values(self) -> list[str]:
+        return sorted(v for v in self._programs if all(f not in v for f in self._FILTER))
 
     @property
-    def ids(self) -> Dict[int, str]:
-        values: Dict[int, str] = {}
+    def ids(self) -> dict[int, str]:
+        values: dict[int, str] = {}
         for name, parameter in self._programs.items():
             if "iot_" not in name:
                 if parameter.parameters.get("prCode"):

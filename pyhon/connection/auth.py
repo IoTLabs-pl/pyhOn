@@ -1,4 +1,5 @@
 from contextlib import AsyncExitStack
+from html import unescape
 import json
 from logging import getLogger
 from re import compile as re_compile
@@ -90,6 +91,7 @@ class _Tokens:
         Args:
             html (str): HTML page content.
         """
+        html = unescape(html)
         redirect_uri = _HON_REDIRECT_REGEX.search(html)
 
         if not redirect_uri:
@@ -149,7 +151,7 @@ class HonAuth:
         After this method is called, the access_token,
         refresh_token and id_token are guaranteed to be set.
         """
-        with self._session.session_history_tracker:
+        with self._session.history_tracker:
             if not self._tokens.initialized or self._tokens.expires_soon or force:
                 if self._tokens.refresh_token:
                     await self._refresh()
@@ -184,7 +186,7 @@ class HonAuth:
         Returns:
             cognito_token (str): The Cognito token.
         """
-        with self._session.session_history_tracker:
+        with self._session.history_tracker:
             if not self._tokens.cognito_token or force:
                 await self._retrieve_cognito_token()
             return cast(str, self._tokens.cognito_token)
@@ -195,7 +197,7 @@ class HonAuth:
         Returns:
             iot_core_token (str): The AWS IoT Core token.
         """
-        with self._session.session_history_tracker:
+        with self._session.history_tracker:
             if not self._tokens.iot_core_token or force:
                 await self._retrieve_iot_core_token()
             return cast(str, self._tokens.iot_core_token)

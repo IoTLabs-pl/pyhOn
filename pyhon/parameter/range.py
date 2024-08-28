@@ -1,11 +1,12 @@
-from typing import Dict, Any, List
+from typing import Any
+from itertools import count, takewhile
 
 from pyhon.helper import str_to_float
 from pyhon.parameter.base import HonParameter
 
 
 class HonParameterRange(HonParameter):
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self.min: float = 0
         self.max: float = 0
@@ -59,12 +60,11 @@ class HonParameterRange(HonParameter):
 
         self.value = value
 
-
     @property
-    def values(self) -> List[str]:
+    def values(self) -> list[str]:
         return [
-            str(self.min + self.step * i)
-            for i in range(int((self.max - self.min) / self.step) + 1)
+            str(v)
+            for v in takewhile(lambda x: x <= self.max, count(self.min, self.step))
         ]
 
     def sync(self, other: "HonParameter") -> None:

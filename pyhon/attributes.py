@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Optional, Final, Dict
+from typing import Optional, Final
 
 from pyhon.helper import str_to_float
 
@@ -7,11 +7,17 @@ from pyhon.helper import str_to_float
 class HonAttribute:
     _LOCK_TIMEOUT: Final = 10
 
-    def __init__(self, data: Dict[str, str] | str):
+    def __init__(self, data: dict[str, str] | str):
         self._value: str = ""
         self._last_update: Optional[datetime] = None
         self._lock_timestamp: Optional[datetime] = None
         self.update(data)
+
+    def __int__(self) -> int:
+        return int(self.value)
+    
+    def __float__(self) -> float:
+        return float(self.value)
 
     @property
     def value(self) -> float | str:
@@ -38,7 +44,7 @@ class HonAttribute:
         lock_until = self._lock_timestamp + timedelta(seconds=self._LOCK_TIMEOUT)
         return lock_until >= datetime.utcnow()
 
-    def update(self, data: Dict[str, str] | str, shield: bool = False) -> bool:
+    def update(self, data: dict[str, str] | str, shield: bool = False) -> bool:
         if self.lock and not shield:
             return False
         if shield:

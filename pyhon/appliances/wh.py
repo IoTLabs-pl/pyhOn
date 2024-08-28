@@ -1,16 +1,11 @@
-from typing import Any, Dict
+from typing import Any
 
-from pyhon.appliances.base import ApplianceBase
-from pyhon.parameter.base import HonParameter
+from pyhon.appliances.base import HonAppliance
+from pyhon.attributes import HonAttribute
 
 
-class Appliance(ApplianceBase):
-    def attributes(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        data = super().attributes(data)
-        parameter = data.get("parameters", {}).get("onOffStatus")
-        is_class = isinstance(parameter, HonParameter)
-        data["active"] = parameter.value == 1 if is_class else parameter == 1
-        return data
-
-    def settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
-        return settings
+class WHAppliance(HonAppliance):
+    async def load_attributes(self) -> dict[str, Any]:
+        await super().load_attributes()
+        data = self._attributes
+        data["active"] = HonAttribute(str(int(data["parameters"]["onOffStatus"].value == 1)))

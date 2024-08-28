@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 class ResponseWrapper:
     code: int
     url: str
+    data: str
 
     def __str__(self) -> str:
         return f"{self.code} - {self.url}"
@@ -47,7 +48,7 @@ class SessionWrapper:
 
     @property
     @contextmanager
-    def session_history_tracker(self) -> Generator[None, None, None]:
+    def history_tracker(self) -> Generator[None, None, None]:
         if self._history_tracking:
             yield
         else:
@@ -62,11 +63,15 @@ class SessionWrapper:
 
     @asynccontextmanager
     async def _request(
-        self, method: SessionWrapperMethod, *args: Any, **kwargs: Any
+        self,
+        method: SessionWrapperMethod,
+        *args: Any,
+        headers=None,
+        **kwargs: Any,
     ) -> AsyncIterator[ClientResponse]:
-        headers = kwargs.pop("headers", {}) | (await self._extra_headers())
+        headers = (headers or {}) | (await self._extra_headers())
 
-        with self.session_history_tracker:
+        with self.history_tracker:
             if self._session is None:
                 raise RuntimeError("Session not initialized")
 
@@ -74,7 +79,11 @@ class SessionWrapper:
                 method, *args, headers=headers, **kwargs
             ) as response:
                 self._history.append(
-                    ResponseWrapper(response.status, str(response.request_info.url))
+                    ResponseWrapper(
+                        response.status,
+                        str(response.request_info.url),
+                        await response.text(),
+                    )
                 )
                 response.raise_for_status()
                 yield response
@@ -101,7 +110,13 @@ class SessionWrapper:
         lines = (
             ["hOn Authentication Error"]
             + [f" {i: 2d}     {resp}" for i, resp in enumerate(self._history, 1)]
-            + [" Error ".center(40, "="), text, 40 * "="]
+            + [
+                " Error ".center(40, "="),
+                text,
+                40 * "=",
+                self._history[-1].data,
+                40 * "=",
+            ]
         )
 
         _LOGGER.error("\n".join(lines))

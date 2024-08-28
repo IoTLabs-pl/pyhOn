@@ -19,7 +19,7 @@ from pyhon import const
 
 if TYPE_CHECKING:
     from aiomqtt import Message
-    from pyhon.appliance import HonAppliance
+    from pyhon.appliances import HonAppliance
     from pyhon.connection.auth import HonAuth
     from pyhon.connection.device import HonDevice
     from typing import Callable

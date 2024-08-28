@@ -1,17 +1,6 @@
-# pylint: disable=duplicate-code
-from typing import Dict, Any
-
-from pyhon.appliances.base import ApplianceBase
+from pyhon.appliances.base import HonAppliance
+from pyhon.appliances.mixins import MachModeActivityMixin
 
 
-class Appliance(ApplianceBase):
-    def attributes(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        data = super().attributes(data)
-        if not self.parent.connection:
-            data["parameters"]["machMode"].value = "0"
-        data["active"] = bool(data.get("activity"))
-        data["pause"] = data["parameters"]["machMode"] == "3"
-        return data
-
-    def settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
-        return settings
+class WDAppliance(MachModeActivityMixin, HonAppliance):
+    pass

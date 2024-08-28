@@ -3,12 +3,12 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 from pyhon import printer
 
 if TYPE_CHECKING:
-    from pyhon.appliance import HonAppliance
+    from pyhon.appliances import HonAppliance
 
 
 def anonymize_data(data: str) -> str:
@@ -34,7 +34,7 @@ def anonymize_data(data: str) -> str:
     return data
 
 
-async def load_data(appliance: "HonAppliance", topic: str) -> Tuple[str, str]:
+async def load_data(appliance: "HonAppliance", topic: str) -> tuple[str, str]:
     return topic, await getattr(appliance.api, f"load_{topic}")(appliance)
 
 
@@ -50,7 +50,7 @@ def write_to_json(data: str, topic: str, path: Path, anonymous: bool = False) ->
 
 async def appliance_data(
     appliance: "HonAppliance", path: Path, anonymous: bool = False
-) -> List[Path]:
+) -> list[Path]:
     requests = [
         "commands",
         "attributes",

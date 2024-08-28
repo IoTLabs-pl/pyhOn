@@ -1,5 +1,5 @@
-from pyhon.appliances.base import ApplianceBase
+from pyhon.appliances.base import HonAppliance
 
 
-class Appliance(ApplianceBase):
+class WCAppliance(HonAppliance):
     pass

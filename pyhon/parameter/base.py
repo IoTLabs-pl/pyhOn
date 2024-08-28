@@ -1,11 +1,11 @@
-from typing import Dict, Any, List, Tuple, Callable, TYPE_CHECKING
+from typing import  Any, List, Tuple, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyhon.rules import HonRule
 
 
 class HonParameter:
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         self._key = key
         self._attributes = attributes
         self._category: str = ""
@@ -13,7 +13,7 @@ class HonParameter:
         self._mandatory: int = 0
         self._value: str | float = ""
         self._group: str = group
-        self._triggers: Dict[
+        self._triggers: dict[
             str, List[Tuple[Callable[["HonRule"], None], "HonRule"]]
         ] = {}
         self._set_attributes()
@@ -78,8 +78,8 @@ class HonParameter:
                 func(args)
 
     @property
-    def triggers(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def triggers(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         for value, rules in self._triggers.items():
             for _, rule in rules:
                 if rule.extras:
