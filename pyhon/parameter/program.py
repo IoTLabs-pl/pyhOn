@@ -1,12 +1,12 @@
 from typing import TYPE_CHECKING
 
-from pyhon.parameter.enum import HonParameterEnum
+from .enum import EnumParameter
 
 if TYPE_CHECKING:
     from pyhon.commands import HonCommand
 
 
-class HonParameterProgram(HonParameterEnum):
+class ProgramParameter(EnumParameter):
     _FILTER = ["iot_recipe", "iot_guided"]
 
     def __init__(self, key: str, command: "HonCommand", group: str) -> None:
@@ -32,7 +32,13 @@ class HonParameterProgram(HonParameterEnum):
 
     @property
     def values(self) -> list[str]:
-        return sorted(v for v in self._programs if all(f not in v for f in self._FILTER))
+        return sorted(
+            v for v in self._programs if all(f not in v for f in self._FILTER)
+        )
+
+    @values.setter
+    def values(self, values: list[str]) -> None:
+        self._values = values
 
     @property
     def ids(self) -> dict[int, str]:

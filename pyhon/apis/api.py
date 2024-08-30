@@ -1,34 +1,30 @@
-from collections.abc import Sequence
 import json
-from contextlib import AsyncExitStack
 import logging
+from collections.abc import Sequence
+from contextlib import AsyncExitStack
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal, cast, no_type_check
+from typing import Any, cast, no_type_check
 
 from aiohttp import ClientSession
 from typing_extensions import Self
 
 from pyhon import const, exceptions
-from pyhon.appliances import HonAppliance
-from pyhon.connection.device import HonDevice
-from pyhon.connection.handler.anonym import AnonymousSessionWrapper
-from pyhon.connection.handler.hon import DataSessionWrapper
-from pyhon.connection.auth import HonAuth
+from pyhon.apis.auth import Authenticator
+from pyhon.apis.wrappers import AnonymousSessionWrapper, DataSessionWrapper
+from pyhon.appliances import Appliance
 
 _LOGGER = logging.getLogger(__name__)
 
 
 # pylint: disable=too-many-instance-attributes
-class HonAPI:
+class API:
     def __init__(
         self,
-        device: HonDevice | None = None,
-        authenticator: HonAuth | None = None,
+        authenticator: Authenticator | None = None,
         session: ClientSession | None = None,
     ) -> None:
         self._resources = AsyncExitStack()
-        self._device = device or HonDevice(const.MOBILE_ID)
 
         self._anonymous_session = AnonymousSessionWrapper(session)
         self.__session = (
@@ -62,15 +58,15 @@ class HonAPI:
         endpoint: str,
         *,
         params: dict[str, str] | None = None,
-        json: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         response_path: Sequence[str] = ("payload",),
-    ):
+    ) -> Any:
         result: dict[str, Any] = {}
-        async with self._session._request(
-            "POST" if json else "GET",
+        async with self._session.request(
+            "POST" if data else "GET",
             f"{const.API_URL}/commands/v1/{endpoint}",
             params=params,
-            json=json,
+            json=data,
         ) as response:
             result = await response.json()
             for field in response_path:
@@ -80,14 +76,7 @@ class HonAPI:
 
     async def load_appliances_data(self) -> list[dict[str, Any]]:
         return (
-            await self.call(
-                "appliance",
-                response_path=(
-                    "payload",
-                    "appliances",
-                ),
-            )
-            or []
+            await self.call("appliance", response_path=("payload", "appliances")) or []
         )
 
     async def appliance_configuration(self) -> dict[str, Any]:
@@ -103,7 +92,6 @@ class HonAPI:
     async def app_config(
         self, language: str = "en", beta: bool = True
     ) -> dict[str, Any]:
-
         async with self._anonymous_session.post(
             f"{const.API_URL}/app-config",
             json={
@@ -128,13 +116,24 @@ class HonAPI:
         return {}
 
 
-class TestAPI(HonAPI):
+class TestAPI(API):
     def __init__(self, path: Path):
         super().__init__()
         self._anonymous = True
         self._path: Path = path
 
-    def _load_json(self, appliance: HonAppliance, file: str) -> dict[str, Any]:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        pass
+
+    def _load_json(self, appliance: Appliance, file: str) -> dict[str, Any]:
         directory = f"{appliance.appliance_type}_{appliance.appliance_model_id}".lower()
         if not (path := self._path / directory / f"{file}.json").exists():
             _LOGGER.warning("Can't open %s", str(path))
@@ -159,37 +158,35 @@ class TestAPI(HonAPI):
                     _LOGGER.error("%s - %s", str(file), error)
         return result
 
-    async def load_commands(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_commands(self, appliance: Appliance) -> dict[str, Any]:
         return self._load_json(appliance, "commands")
 
     @no_type_check
-    async def load_command_history(
-        self, appliance: HonAppliance
-    ) -> list[dict[str, Any]]:
+    async def load_command_history(self, appliance: Appliance) -> list[dict[str, Any]]:
         return self._load_json(appliance, "command_history")
 
-    async def load_favourites(self, appliance: HonAppliance) -> list[dict[str, Any]]:
+    async def load_favourites(self, _appliance: Appliance) -> list[dict[str, Any]]:
         return []
 
-    async def load_last_activity(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_last_activity(self, _appliance: Appliance) -> dict[str, Any]:
         return {}
 
-    async def load_appliance_data(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_appliance_data(self, appliance: Appliance) -> dict[str, Any]:
         return self._load_json(appliance, "appliance_data")
 
-    async def load_attributes(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_attributes(self, appliance: Appliance) -> dict[str, Any]:
         return self._load_json(appliance, "attributes")
 
-    async def load_statistics(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_statistics(self, appliance: Appliance) -> dict[str, Any]:
         return self._load_json(appliance, "statistics")
 
-    async def load_maintenance(self, appliance: HonAppliance) -> dict[str, Any]:
+    async def load_maintenance(self, appliance: Appliance) -> dict[str, Any]:
         return self._load_json(appliance, "maintenance")
 
     async def send_command(
         self,
-        appliance: HonAppliance,
-        command: str,
+        _appliance: Appliance,
+        _command: str,
         parameters: dict[str, Any],
         ancillary_parameters: dict[str, Any],
         program_name: str = "",

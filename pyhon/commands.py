@@ -1,16 +1,17 @@
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from pyhon.parameter.base import HonParameter
-from pyhon.parameter.enum import HonParameterEnum
-from pyhon.parameter.fixed import HonParameterFixed
-from pyhon.parameter.program import HonParameterProgram
-from pyhon.parameter.range import HonParameterRange
+from pyhon.parameter import (
+    EnumParameter,
+    FixedParameter,
+    Parameter,
+    ProgramParameter,
+    RangeParameter,
+)
 from pyhon.rules import HonRuleSet
 
 if TYPE_CHECKING:
-    from pyhon import HonAPI
-    from pyhon.appliances import HonAppliance
+    from pyhon.appliances import Appliance
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,60 +21,39 @@ class HonCommand:
         self,
         name: str,
         attributes: dict[str, Any],
-        appliance: "HonAppliance",
+        appliance: "Appliance",
         category_name: str = "",
         categories: dict[str, "HonCommand"] | None = None,
     ):
         self._name: str = name
-        self._appliance: "HonAppliance" = appliance
+        self._appliance: "Appliance" = appliance
         self._categories: dict[str, "HonCommand"] | None = categories
         self._category_name: str = category_name
-        self._parameters: dict[str, HonParameter] = {}
+        self._parameters: dict[str, Parameter] = {}
         self._data: dict[str, Any] = {}
         self._rules: list[HonRuleSet] = []
         attributes.pop("description")
         attributes.pop("protocolType")
         self._load_parameters(attributes)
 
-    def __repr__(self) -> str:
-        return f"{self.name} command"
-
     @property
     def name(self) -> str:
         return self._name
-
-    @property
-    def api(self) -> "HonAPI":
-        return self._appliance._api
-
-    @property
-    def appliance(self) -> "HonAppliance":
-        return self._appliance
 
     @property
     def data(self) -> dict[str, Any]:
         return self._data
 
     @property
-    def parameters(self) -> dict[str, HonParameter]:
+    def parameters(self) -> dict[str, Parameter]:
         return self._parameters
 
-    @property
-    def settings(self) -> dict[str, HonParameter]:
-        return self._parameters
-
-    @property
-    def parameter_groups(self) -> dict[str, dict[str, str | float]]:
+    def parameter_groups(
+        self, mandatory_only: bool = False
+    ) -> dict[str, dict[str, str | float]]:
         result: dict[str, dict[str, str | float]] = {}
         for name, parameter in self._parameters.items():
-            result.setdefault(parameter.group, {})[name] = parameter.intern_value
-        return result
-
-    @property
-    def mandatory_parameter_groups(self) -> dict[str, dict[str, str | float]]:
-        result: dict[str, dict[str, str | float]] = {}
-        for name, parameter in self._parameters.items():
-            if parameter.mandatory:
+            if not mandatory_only or parameter.mandatory:
                 result.setdefault(parameter.group, {})[name] = parameter.intern_value
         return result
 
@@ -105,22 +85,20 @@ class HonCommand:
                 _LOGGER.warning("Rule not supported: %s", data)
         match data.get("typology"):
             case "range":
-                self._parameters[name] = HonParameterRange(name, data, parameter)
+                self._parameters[name] = RangeParameter(name, data, parameter)
             case "enum":
-                self._parameters[name] = HonParameterEnum(name, data, parameter)
+                self._parameters[name] = EnumParameter(name, data, parameter)
             case "fixed":
-                self._parameters[name] = HonParameterFixed(name, data, parameter)
+                self._parameters[name] = FixedParameter(name, data, parameter)
             case _:
                 self._data[name] = data
                 return
         if self._category_name:
             name = "program" if "PROGRAM" in self._category_name else "category"
-            self._parameters[name] = HonParameterProgram(name, self, "custom")
+            self._parameters[name] = ProgramParameter(name, self, "custom")
 
     async def send(self, only_mandatory: bool = False) -> bool:
-        grouped_params = (
-            self.mandatory_parameter_groups if only_mandatory else self.parameter_groups
-        )
+        grouped_params = self.parameter_groups(only_mandatory)
         params = grouped_params.get("parameters", {})
         return await self.send_parameters(params)
 
@@ -132,18 +110,17 @@ class HonCommand:
         return await self.send_parameters(params)
 
     async def send_parameters(self, params: dict[str, str | float]) -> bool:
-        ancillary_params = self.parameter_groups.get("ancillaryParameters", {})
+        ancillary_params = self.parameter_groups().get("ancillaryParameters", {})
         ancillary_params.pop("programRules", None)
         if "prStr" in params:
             params["prStr"] = self._category_name.upper()
-        self.appliance.sync_command_to_params(self.name)
+        self._appliance.sync_command_to_params(self.name)
         return await self._appliance.send_command(
             self._name,
             params,
             ancillary_params,
             self._category_name,
         )
-
 
     @property
     def categories(self) -> dict[str, "HonCommand"]:
@@ -171,8 +148,8 @@ class HonCommand:
         )
 
     @property
-    def available_settings(self) -> dict[str, HonParameter]:
-        result: dict[str, HonParameter] = {}
+    def available_settings(self) -> dict[str, Parameter]:
+        result: dict[str, Parameter] = {}
         for command in self.categories.values():
             for name, parameter in command.parameters.items():
                 if name in result:
@@ -194,7 +171,7 @@ class HonCommand:
             and data.get("protocolType") is not None
         )
 
-    def update(self, data: dict[str, str | dict]) -> None:
+    def update(self, data: dict[str, str | dict[str, Any]]) -> None:
         """Update command with new data"""
         for d in data.values():
             if not isinstance(d, str):
@@ -202,8 +179,8 @@ class HonCommand:
                     if parameter := self.parameters.get(key):
                         parameter.value = value
 
-    def set_as_favourite(self):
+    def set_as_favourite(self) -> None:
         """Set command as favourite"""
         self.parameters.update(
-            favourite=HonParameterFixed("favourite", {"fixedValue": "1"}, "custom")
+            favourite=FixedParameter("favourite", {"fixedValue": "1"}, "custom")
         )

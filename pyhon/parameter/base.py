@@ -1,10 +1,11 @@
-from typing import  Any, List, Tuple, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from pyhon.rules import HonRule
 
 
-class HonParameter:
+# pylint: disable=too-many-instance-attributes
+class Parameter:
     def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         self._key = key
         self._attributes = attributes
@@ -14,7 +15,7 @@ class HonParameter:
         self._value: str | float = ""
         self._group: str = group
         self._triggers: dict[
-            str, List[Tuple[Callable[["HonRule"], None], "HonRule"]]
+            str, list[tuple[Callable[["HonRule"], None], "HonRule"]]
         ] = {}
         self._set_attributes()
 
@@ -22,6 +23,14 @@ class HonParameter:
         self._category = self._attributes.get("category", "")
         self._typology = self._attributes.get("typology", "")
         self._mandatory = self._attributes.get("mandatory", 0)
+
+    def __repr__(self) -> str:
+        avr = self._allowed_values_repr
+        return f"{self.__class__} (<{self.key}>={self.value} {avr})"
+
+    @property
+    def _allowed_values_repr(self) -> str:
+        return ""
 
     @property
     def key(self) -> str:
@@ -39,12 +48,15 @@ class HonParameter:
     def apply_fixed_value(self, value: str | float) -> None:
         self.value = str(value)
 
+    def apply_rule(self, _rule: "HonRule") -> None:
+        raise TypeError(f"Rule not applicable to {self.__class__}")
+
     @property
     def intern_value(self) -> str:
         return str(self.value)
 
     @property
-    def values(self) -> List[str]:
+    def values(self) -> list[str]:
         return [str(self.value)]
 
     @property
@@ -100,11 +112,11 @@ class HonParameter:
     def reset(self) -> None:
         self._set_attributes()
 
-    def sync(self, other: "HonParameter"):
+    def sync(self, other: "Parameter") -> None:
         self.value = other.value
 
-    def more_options(self, other: "HonParameter") -> "HonParameter":
+    def more_options(self, other: "Parameter") -> "Parameter":
         if len(other.values) > len(self.values):
             return other
-        
+
         return self

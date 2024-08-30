@@ -1,7 +1,6 @@
-from typing import  Any, TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any
 
-from pyhon.parameter.enum import HonParameterEnum
-from pyhon.parameter.range import HonParameterRange
+from pyhon.parameter import EnumParameter, RangeParameter
 
 if TYPE_CHECKING:
     from pyhon.commands import HonCommand
@@ -58,9 +57,9 @@ def create_commands(
     result: dict[str, Any] = {}
     for name, command in commands.items():
         for parameter, data in command.available_settings.items():
-            if isinstance(data, HonParameterEnum):
-                value: List[str] | dict[str, str | float] = data.values
-            elif isinstance(data, HonParameterRange):
+            if isinstance(data, EnumParameter):
+                value: list[str] | dict[str, str | float] = data.values
+            elif isinstance(data, RangeParameter):
                 value = {"min": data.min, "max": data.max, "step": data.step}
             else:
                 continue

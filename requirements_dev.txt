@@ -1,6 +1,4 @@
-black>=22.12
-flake8>=6.0
 mypy>=0.991
-pylint>=2.15
+ruff>=0.63
 setuptools>=62.3
 types-paho-mqtt>=1.6

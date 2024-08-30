@@ -1,20 +1,17 @@
-from dataclasses import dataclass
-from functools import update_wrapper
 import logging
 from collections import deque
 from collections.abc import AsyncIterator, Generator
 from contextlib import (
+    AbstractAsyncContextManager,
     AsyncExitStack,
     asynccontextmanager,
-    AbstractAsyncContextManager,
     contextmanager,
 )
+from dataclasses import dataclass
+from functools import update_wrapper
 from typing import Any, Literal
 
-from aiohttp import ClientSession, ClientResponse
-
-
-from pyhon import const
+from aiohttp import ClientResponse, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 class ResponseWrapper:
     code: int
     url: str
-    data: str
+    response_text: str
 
     def __str__(self) -> str:
         return f"{self.code} - {self.url}"
@@ -34,10 +31,9 @@ SessionWrapperMethod = Literal["GET", "POST"]
 
 class SessionWrapper:
     __MAX_HISTORY_LEN = 15
-    _HEADERS = {"User-Agent": const.USER_AGENT}
+    _HEADERS: dict[str, str] = {}
 
     def __init__(self, session: ClientSession | None = None) -> None:
-
         self._resources = AsyncExitStack()
         self._history: deque[ResponseWrapper] = deque(maxlen=self.__MAX_HISTORY_LEN)
         self._history_tracking = False
@@ -62,11 +58,11 @@ class SessionWrapper:
                 self._history_tracking = False
 
     @asynccontextmanager
-    async def _request(
+    async def request(
         self,
         method: SessionWrapperMethod,
         *args: Any,
-        headers=None,
+        headers: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ClientResponse]:
         headers = (headers or {}) | (await self._extra_headers())
@@ -91,12 +87,12 @@ class SessionWrapper:
     def get(
         self, *args: Any, **kwargs: Any
     ) -> AbstractAsyncContextManager[ClientResponse]:
-        return self._request("GET", *args, **kwargs)
+        return self.request("GET", *args, **kwargs)
 
     def post(
         self, *args: Any, **kwargs: Any
     ) -> AbstractAsyncContextManager[ClientResponse]:
-        return self._request("POST", *args, **kwargs)
+        return self.request("POST", *args, **kwargs)
 
     async def __aenter__(self) -> "SessionWrapper":
         if self._session is None:
@@ -114,7 +110,7 @@ class SessionWrapper:
                 " Error ".center(40, "="),
                 text,
                 40 * "=",
-                self._history[-1].data,
+                self._history[-1].response_text,
                 40 * "=",
             ]
         )

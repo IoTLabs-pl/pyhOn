@@ -1,28 +1,28 @@
 import asyncio
-from dataclasses import dataclass
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from functools import cached_property, partial
 import json
 import logging
 import pprint
-import random
-import string
 import ssl
-from typing import Any, TYPE_CHECKING, AsyncIterator, cast
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
+from functools import cached_property, partial
+from typing import TYPE_CHECKING, Any, AsyncIterator, cast
 from urllib.parse import urlencode
 
+import backoff
 from aiomqtt import Client, MqttError, ProtocolVersion, Topic
 from paho.mqtt.subscribeoptions import SubscribeOptions
-import backoff
-from pyhon import const
 
+from pyhon import const
+from pyhon.apis import device as HonDevice
 
 if TYPE_CHECKING:
-    from aiomqtt import Message
-    from pyhon.appliances import HonAppliance
-    from pyhon.connection.auth import HonAuth
-    from pyhon.connection.device import HonDevice
     from typing import Callable
+
+    from aiomqtt import Message
+
+    from pyhon.apis.auth import Authenticator
+    from pyhon.appliances import Appliance
 
 _LOGGER = logging.getLogger(__name__)
 _BACKOFF_LOGGER = logging.getLogger(f"{__name__}.backoff")
@@ -51,9 +51,8 @@ class Subscription:
 class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def __init__(
         self,
-        authenticator: "HonAuth",
-        device: "HonDevice",
-        appliances: "list[HonAppliance]",
+        authenticator: "Authenticator",
+        appliances: "list[Appliance]",
         message_callback: "Callable[[], None] | None" = None,
     ) -> None:
         self._task: asyncio.Task[None] | None = None
@@ -61,10 +60,6 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         self._appliances = appliances
         self._auth = authenticator
         self._message_callback = message_callback
-
-        self._client_id = (
-            f"{device.mobile_id}_{''.join(random.choices(string.hexdigits, k=16))}"
-        )
 
     async def _get_mqtt_username(self) -> str:
         query_params = {
@@ -78,18 +73,17 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
 
     @cached_property
     def _subscriptions(self) -> dict[Topic, Subscription]:
-
         handlers = {}
 
         for appliance in self._appliances:
-
             handler_protos = {
                 "appliancestatus": partial(self._status_handler, appliance),
                 "disconnected": partial(self._connection_handler, appliance, False),
                 "connected": partial(self._connection_handler, appliance, True),
             }
 
-            for topic in appliance.info.get("topics", {}).get("subscribe", []):
+            topic: str
+            for topic in appliance.data.get("topics", {}).get("subscribe", []):
                 topic_parts = topic.split("/")
                 for topic_part, handler in handler_protos.items():
                     if topic_part in topic_parts:
@@ -99,7 +93,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         return handlers
 
     @staticmethod
-    def _status_handler(appliance: "HonAppliance", message: "Message") -> None:
+    def _status_handler(appliance: "Appliance", message: "Message") -> None:
         payload = _Payload(json.loads(cast(str | bytes | bytearray, message.payload)))
         for parameter in payload["parameters"]:
             appliance.attributes["parameters"][parameter["parName"]].update(parameter)
@@ -109,9 +103,9 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
 
     @staticmethod
     def _connection_handler(
-        appliance: "HonAppliance", connection_status: bool, __message: "Message"
+        appliance: "Appliance", connection_status: bool, __message: "Message"
     ) -> None:
-        appliance.connection = connection_status
+        appliance.attributes["parameters"]["connection"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
         self._task = None
@@ -147,13 +141,12 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         async with Client(
             hostname=const.MQTT_ENDPOINT,
             port=const.MQTT_PORT,
-            identifier=self._client_id,
+            identifier=HonDevice.MQTT_CLIENT_ID,
             username=await self._get_mqtt_username(),
             protocol=ProtocolVersion.V5,
             logger=_PAHO_LOGGER,
             tls_context=tls_context,
         ) as client:
-
             await client.subscribe(
                 [s.as_subscription_tuple() for s in self._subscriptions.values()]
             )

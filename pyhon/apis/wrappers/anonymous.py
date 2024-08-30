@@ -1,5 +1,6 @@
 from pyhon import const
-from pyhon.connection.handler.base import SessionWrapper
+
+from ._base import SessionWrapper
 
 
 class AnonymousSessionWrapper(SessionWrapper):

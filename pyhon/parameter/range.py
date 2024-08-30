@@ -1,11 +1,11 @@
 from typing import Any
-from itertools import count, takewhile
 
 from pyhon.helper import str_to_float
-from pyhon.parameter.base import HonParameter
+
+from .base import Parameter
 
 
-class HonParameterRange(HonParameter):
+class RangeParameter(Parameter):
     def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self.min: float = 0
@@ -23,8 +23,9 @@ class HonParameterRange(HonParameter):
         self._default = str_to_float(self._attributes.get("defaultValue", self.min))
         self._value = self._default
 
-    def __repr__(self) -> str:
-        return f"{self.__class__} (<{self.key}> [{self.min} - {self.max}])"
+    @property
+    def _allowed_values_repr(self) -> str:
+        return f"[{self.min}:{self.max}:{self.step}]"
 
     @property
     def step(self) -> float:
@@ -62,13 +63,11 @@ class HonParameterRange(HonParameter):
 
     @property
     def values(self) -> list[str]:
-        return [
-            str(v)
-            for v in takewhile(lambda x: x <= self.max, count(self.min, self.step))
-        ]
+        count = round((self.max - self.min) / self.step)
+        return [str(self.min + self.step * i) for i in range(count + 1)]
 
-    def sync(self, other: "HonParameter") -> None:
-        if isinstance(other, HonParameterRange):
+    def sync(self, other: "Parameter") -> None:
+        if isinstance(other, RangeParameter):
             self.min = other.min
             self.max = other.max
             self.step = other.step

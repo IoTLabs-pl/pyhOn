@@ -1,5 +1,6 @@
 from pyhon import const
-from pyhon.connection.handler.base import SessionWrapper
+
+from ._base import SessionWrapper
 
 _DOMAIN = const.AUTH_API_URL.rsplit("/", 1)[-1]
 

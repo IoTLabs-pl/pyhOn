@@ -1,23 +1,23 @@
-from .base import HonAppliance
-from .ac import ACAppliance
-from .dw import DWAppliance
-from .ov import OVAppliance
-from .ref import RefAppliance
-from .td import TDAppliance
-from .wc import WCAppliance
-from .wd import WDAppliance
-from .wh import WHAppliance
-from .wm import WMAppliance
+from ._base import Appliance
+from .air_conditioner import AirConditioner
+from .dish_washer import DishWasher
+from .fridge import Fridge
+from .oven import Oven
+from .tumble_dryer import TumbleDryer
+from .washer_dryer import WasherDryer
+from .washing_machine import WashingMachine
+from .water_heater import WaterHeater
+from .wine_cellar import WineCellar
 
 __all__ = [
-    "HonAppliance",
-    "ACAppliance",
-    "DWAppliance",
-    "OVAppliance",
-    "RefAppliance",
-    "TDAppliance",
-    "WCAppliance",
-    "WDAppliance",
-    "WHAppliance",
-    "WMAppliance",
+    "Appliance",
+    "AirConditioner",
+    "DishWasher",
+    "Oven",
+    "Fridge",
+    "TumbleDryer",
+    "WineCellar",
+    "WasherDryer",
+    "WaterHeater",
+    "WashingMachine",
 ]

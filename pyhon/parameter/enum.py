@@ -1,6 +1,6 @@
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from pyhon.parameter.base import HonParameter
+from .base import Parameter
 
 if TYPE_CHECKING:
     from pyhon.rules import HonRule
@@ -10,7 +10,7 @@ def clean_value(value: str | float) -> str:
     return str(value).strip("[]").replace("|", "_").lower()
 
 
-class HonParameterEnum(HonParameter):
+class EnumParameter(Parameter):
     def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self._default: str | float = ""
@@ -26,8 +26,9 @@ class HonParameterEnum(HonParameter):
         self._value = self._default or "0"
         self._values = self._attributes.get("enumValues", [])
 
-    def __repr__(self) -> str:
-        return f"{self.__class__} (<{self.key}> {self.values})"
+    @property
+    def _allowed_values_repr(self) -> str:
+        return f"{{{self.values}}}"
 
     @property
     def values(self) -> list[str]:
@@ -64,6 +65,8 @@ class HonParameterEnum(HonParameter):
         else:
             raise ValueError(f"Allowed values: {self._values} But was: {value}")
 
-    def sync(self, other: "HonParameterEnum") -> None:
+    def sync(self, other: "Parameter") -> None:
+        if not isinstance(other, EnumParameter):
+            raise ValueError(f"Can't sync {self.__class__} with {other.__class__}")
         self.values = other.values
         super().sync(other)

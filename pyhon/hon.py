@@ -1,17 +1,17 @@
-from collections.abc import Callable
-from contextlib import AsyncExitStack
+from collections.abc import Callable, Generator
+from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
 from types import TracebackType
+from typing import Any
 
 from aiohttp import ClientSession
 from typing_extensions import Self
 
-from pyhon.appliances import HonAppliance
-from pyhon.connection.device import HonDevice
-from pyhon.const import MOBILE_ID
-from pyhon.connection.api import HonAPI, TestAPI
-from pyhon.connection.auth import HonAuth
-from pyhon.connection.mqtt import MQTTClient
+from pyhon.apis.api import API, TestAPI
+from pyhon.apis.auth import Authenticator
+from pyhon.apis.mqtt import MQTTClient
+from pyhon.appliances import Appliance
+
 
 class Hon:
     def __init__(
@@ -19,7 +19,7 @@ class Hon:
         email: str,
         password: str,
         session: ClientSession | None = None,
-        mobile_id: str = MOBILE_ID,
+        mqtt: bool = False,
         refresh_token: str | None = None,
         test_data_path: Path | None = None,
     ):
@@ -27,15 +27,23 @@ class Hon:
         self._resources = AsyncExitStack()
         self._notify_function: Callable[[], None] | None = None
 
-        self.appliances: list[HonAppliance] = []
+        self.appliances: list[Appliance] = []
 
-        device = HonDevice(mobile_id)
-        authenticator = HonAuth(email, password, device, session, refresh_token)
+        authenticator = Authenticator(email, password, session, refresh_token)
 
-        self._api = HonAPI(device, authenticator, session)
-        self._mqtt_client = MQTTClient(
-            authenticator, device, self.appliances, self.notify
+        self._api = API(authenticator, session)
+        self._mqtt_client = (
+            MQTTClient(authenticator, self.appliances, self.notify)
+            if mqtt
+            else nullcontext()
         )
+
+    def __await__(self) -> Generator[Any, None, None]:
+        if isinstance(client := self._mqtt_client, MQTTClient):
+            if task := client._task:
+                yield from task.__await__()
+        else:
+            yield
 
     async def __aenter__(self) -> Self:
         return await self.setup()
@@ -45,15 +53,9 @@ class Hon:
 
         appliances_data = await self._api.load_appliances_data()
 
-        self.appliances.extend(
-            [
-                appliance
-                for appliance_data in appliances_data
-                async for appliance in HonAppliance.create_from_data(
-                    self._api, appliance_data
-                )
-            ]
-        )
+        for appliance_data in appliances_data:
+            async for a in Appliance.create_from_data(self._api, appliance_data):
+                self.appliances.append(a)
 
         if (
             self._test_data_path
@@ -62,9 +64,10 @@ class Hon:
             ).exists()
             or (test_data := test_data / "..").exists()
         ):
-            api = TestAPI(test_data)
-            for appliance in await api.load_appliances():
-                await self._create_appliance(appliance, api)
+            appliances_data = await TestAPI(test_data).load_appliances()
+            for appliance_data in appliances_data:
+                async for a in Appliance.create_from_data(self._api, appliance_data):
+                    self.appliances.append(a)
 
         await self._resources.enter_async_context(self._mqtt_client)
 
