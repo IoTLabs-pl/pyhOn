@@ -1,4 +1,4 @@
 mypy>=0.991
-ruff>=0.63
+ruff>=0.6.3
 setuptools>=62.3
 types-paho-mqtt>=1.6
