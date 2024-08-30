@@ -1,7 +1,6 @@
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
-from types import TracebackType
 from typing import Any
 
 from aiohttp import ClientSession
@@ -29,21 +28,16 @@ class Hon:
 
         self.appliances: list[Appliance] = []
 
-        authenticator = Authenticator(email, password, session, refresh_token)
+        self._auth = auth = Authenticator(email, password, session, refresh_token)
 
-        self._api = API(authenticator, session)
-        self._mqtt_client = (
-            MQTTClient(authenticator, self.appliances, self.notify)
-            if mqtt
-            else nullcontext()
+        self._api = API(auth, session)
+        self.mqtt_client = (
+            MQTTClient(auth, self.appliances, self.notify) if mqtt else nullcontext()
         )
 
-    def __await__(self) -> Generator[Any, None, None]:
-        if isinstance(client := self._mqtt_client, MQTTClient):
-            if task := client._task:
-                yield from task.__await__()
-        else:
-            yield
+    @property
+    def is_mqtt_enabled(self) -> bool:
+        return isinstance(self.mqtt_client, MQTTClient)
 
     async def __aenter__(self) -> Self:
         return await self.setup()
@@ -69,9 +63,13 @@ class Hon:
                 async for a in Appliance.create_from_data(self._api, appliance_data):
                     self.appliances.append(a)
 
-        await self._resources.enter_async_context(self._mqtt_client)
+        await self._resources.enter_async_context(self.mqtt_client)
 
         return self
+
+    async def close(self) -> str | None:
+        await self._resources.aclose()
+        return self._auth.refresh_token
 
     def subscribe_updates(self, notify_function: Callable[[], None]) -> None:
         self._notify_function = notify_function
@@ -80,10 +78,5 @@ class Hon:
         if self._notify_function:
             self._notify_function()
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self._resources.aclose()
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()

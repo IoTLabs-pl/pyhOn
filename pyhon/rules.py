@@ -27,7 +27,7 @@ class HonRuleSet:
 
     def _parse_rule(self, rule: dict[str, Any]) -> None:
         for param_key, params in rule.items():
-            param_key = self._command._appliance.options.get(param_key, param_key)
+            param_key = self._command.appliance.options.get(param_key, param_key)
             for trigger_key, trigger_data in params.items():
                 self._parse_conditions(param_key, trigger_key, trigger_data)
 
@@ -39,7 +39,7 @@ class HonRuleSet:
         extra: dict[str, str] | None = None,
     ) -> None:
         trigger_key = trigger_key.replace("@", "")
-        trigger_key = self._command._appliance.options.get(trigger_key, trigger_key)
+        trigger_key = self._command.appliance.options.get(trigger_key, trigger_key)
         for multi_trigger_value, param_data in trigger_data.items():
             for trigger_value in multi_trigger_value.split("|"):
                 if isinstance(param_data, dict):

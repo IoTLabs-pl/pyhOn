@@ -36,7 +36,7 @@ def anonymize_data(data: str) -> str:
 
 
 async def load_data(appliance: "Appliance", topic: str) -> tuple[str, str]:
-    return topic, await getattr(appliance._api, f"load_{topic}")(appliance)
+    return topic, await getattr(appliance, f"load_{topic}")()
 
 
 def write_to_json(data: str, topic: str, path: Path, anonymous: bool = False) -> Path:

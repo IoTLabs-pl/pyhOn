@@ -11,7 +11,7 @@ from typing import Any, Tuple
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pyhon import Hon, HonAPI, diagnose, printer
+from pyhon import Hon, HonAPI, MQTTClient, diagnose, printer
 
 _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -105,7 +105,8 @@ async def main() -> None:
             else:
                 print(device.yaml_export())
 
-        await hon
+        if isinstance(hon.mqtt_client, MQTTClient) and hon.mqtt_client.task:
+            await hon.mqtt_client.task
 
 
 def start() -> None:

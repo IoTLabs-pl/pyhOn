@@ -3,7 +3,7 @@ import json
 import logging
 import pprint
 import ssl
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import cached_property, partial
 from typing import TYPE_CHECKING, Any, AsyncIterator, cast
@@ -55,7 +55,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         appliances: "list[Appliance]",
         message_callback: "Callable[[], None] | None" = None,
     ) -> None:
-        self._task: asyncio.Task[None] | None = None
+        self.task: asyncio.Task[None] | None = None
 
         self._appliances = appliances
         self._auth = authenticator
@@ -108,24 +108,20 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         appliance.attributes["parameters"]["connection"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
-        self._task = None
-        try:
+        self.task = None
+        with suppress(asyncio.CancelledError):
             _LOGGER.error("MQTT loop broken", exc_info=task.exception())
-        except asyncio.CancelledError:
-            pass
 
     async def __aenter__(self) -> "MQTTClient":
-        self._task = asyncio.create_task(self.loop())
-        self._task.add_done_callback(self._loop_break)
+        self.task = asyncio.create_task(self.loop())
+        self.task.add_done_callback(self._loop_break)
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        if self.task:
+            self.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.task
 
     @asynccontextmanager
     @backoff.on_exception(

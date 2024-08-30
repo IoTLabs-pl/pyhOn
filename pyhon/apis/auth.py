@@ -137,6 +137,10 @@ class Authenticator:
         self._resources = AsyncExitStack()
         self._tokens = _Tokens(refresh_token=refresh_token)
 
+    @property
+    def refresh_token(self) -> str | None:
+        return self._tokens.refresh_token
+
     async def _ensure_authenticated(self, force: bool = False) -> None:
         """Ensure that the user is authenticated.
         If the tokens are about to expiry, refresh them.

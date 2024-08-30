@@ -48,6 +48,10 @@ class HonCommand:
     def parameters(self) -> dict[str, Parameter]:
         return self._parameters
 
+    @property
+    def appliance(self) -> "Appliance":
+        return self._appliance
+
     def parameter_groups(
         self, mandatory_only: bool = False
     ) -> dict[str, dict[str, str | float]]:
