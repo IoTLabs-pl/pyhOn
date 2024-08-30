@@ -67,7 +67,7 @@ class Hon:
 
         return self
 
-    async def close(self) -> str | None:
+    async def aclose(self) -> str | None:
         await self._resources.aclose()
         return self._auth.refresh_token
 
@@ -79,4 +79,4 @@ class Hon:
             self._notify_function()
 
     async def __aexit__(self, *args: Any) -> None:
-        await self.close()
+        await self.aclose()
