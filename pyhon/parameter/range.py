@@ -1,14 +1,15 @@
-from typing import Dict, Any, List
+from typing import Any
 
 from pyhon.helper import str_to_float
-from pyhon.parameter.base import HonParameter
+
+from .base import Parameter
 
 
-class HonParameterRange(HonParameter):
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+class RangeParameter(Parameter):
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
-        self._min: float = 0
-        self._max: float = 0
+        self.min: float = 0
+        self.max: float = 0
         self._step: float = 0
         self._default: float = 0
         self._value: float = 0
@@ -16,30 +17,15 @@ class HonParameterRange(HonParameter):
 
     def _set_attributes(self) -> None:
         super()._set_attributes()
-        self._min = str_to_float(self._attributes.get("minimumValue", 0))
-        self._max = str_to_float(self._attributes.get("maximumValue", 0))
+        self.min = str_to_float(self._attributes.get("minimumValue", 0))
+        self.max = str_to_float(self._attributes.get("maximumValue", 0))
         self._step = str_to_float(self._attributes.get("incrementValue", 0))
         self._default = str_to_float(self._attributes.get("defaultValue", self.min))
         self._value = self._default
 
-    def __repr__(self) -> str:
-        return f"{self.__class__} (<{self.key}> [{self.min} - {self.max}])"
-
     @property
-    def min(self) -> float:
-        return self._min
-
-    @min.setter
-    def min(self, mini: float) -> None:
-        self._min = mini
-
-    @property
-    def max(self) -> float:
-        return self._max
-
-    @max.setter
-    def max(self, maxi: float) -> None:
-        self._max = maxi
+    def _allowed_values_repr(self) -> str:
+        return f"[{self.min}:{self.max}:{self.step}]"
 
     @property
     def step(self) -> float:
@@ -67,11 +53,27 @@ class HonParameterRange(HonParameter):
             allowed = f"min {self.min} max {self.max} step {self.step}"
             raise ValueError(f"Allowed: {allowed} But was: {value}")
 
+    def apply_fixed_value(self, value: str | float) -> None:
+        value = float(value)
+
+        self.min = min(self.min, value)
+        self.max = max(self.max, value)
+
+        self.value = value
+
     @property
-    def values(self) -> List[str]:
-        result = []
-        i = self.min
-        while i <= self.max:
-            result.append(str(i))
-            i += self.step
-        return result
+    def values(self) -> list[str]:
+        count = round((self.max - self.min) / self.step)
+        return [str(self.min + self.step * i) for i in range(count + 1)]
+
+    def sync(self, other: "Parameter") -> None:
+        if isinstance(other, RangeParameter):
+            self.min = other.min
+            self.max = other.max
+            self.step = other.step
+        else:
+            self.max = int(other.value)
+            self.min = int(other.value)
+            self.step = 1
+
+        super().sync(other)

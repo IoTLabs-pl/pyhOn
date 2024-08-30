@@ -1,20 +1,17 @@
-from dataclasses import dataclass
-from functools import update_wrapper
 import logging
 from collections import deque
 from collections.abc import AsyncIterator, Generator
 from contextlib import (
+    AbstractAsyncContextManager,
     AsyncExitStack,
     asynccontextmanager,
-    AbstractAsyncContextManager,
     contextmanager,
 )
+from dataclasses import dataclass
+from functools import update_wrapper
 from typing import Any, Literal
 
-from aiohttp import ClientSession, ClientResponse
-
-
-from pyhon import const
+from aiohttp import ClientResponse, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 class ResponseWrapper:
     code: int
     url: str
+    response_text: str
 
     def __str__(self) -> str:
         return f"{self.code} - {self.url}"
@@ -33,10 +31,9 @@ SessionWrapperMethod = Literal["GET", "POST"]
 
 class SessionWrapper:
     __MAX_HISTORY_LEN = 15
-    _HEADERS = {"User-Agent": const.USER_AGENT}
+    _HEADERS: dict[str, str] = {}
 
     def __init__(self, session: ClientSession | None = None) -> None:
-
         self._resources = AsyncExitStack()
         self._history: deque[ResponseWrapper] = deque(maxlen=self.__MAX_HISTORY_LEN)
         self._history_tracking = False
@@ -47,7 +44,7 @@ class SessionWrapper:
 
     @property
     @contextmanager
-    def session_history_tracker(self) -> Generator[None, None, None]:
+    def history_tracker(self) -> Generator[None, None, None]:
         if self._history_tracking:
             yield
         else:
@@ -61,12 +58,16 @@ class SessionWrapper:
                 self._history_tracking = False
 
     @asynccontextmanager
-    async def _request(
-        self, method: SessionWrapperMethod, *args: Any, **kwargs: Any
+    async def request(
+        self,
+        method: SessionWrapperMethod,
+        *args: Any,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
     ) -> AsyncIterator[ClientResponse]:
-        headers = kwargs.pop("headers", {}) | (await self._extra_headers())
+        headers = (headers or {}) | (await self._extra_headers())
 
-        with self.session_history_tracker:
+        with self.history_tracker:
             if self._session is None:
                 raise RuntimeError("Session not initialized")
 
@@ -74,7 +75,11 @@ class SessionWrapper:
                 method, *args, headers=headers, **kwargs
             ) as response:
                 self._history.append(
-                    ResponseWrapper(response.status, str(response.request_info.url))
+                    ResponseWrapper(
+                        response.status,
+                        str(response.request_info.url),
+                        await response.text(),
+                    )
                 )
                 response.raise_for_status()
                 yield response
@@ -82,12 +87,12 @@ class SessionWrapper:
     def get(
         self, *args: Any, **kwargs: Any
     ) -> AbstractAsyncContextManager[ClientResponse]:
-        return self._request("GET", *args, **kwargs)
+        return self.request("GET", *args, **kwargs)
 
     def post(
         self, *args: Any, **kwargs: Any
     ) -> AbstractAsyncContextManager[ClientResponse]:
-        return self._request("POST", *args, **kwargs)
+        return self.request("POST", *args, **kwargs)
 
     async def __aenter__(self) -> "SessionWrapper":
         if self._session is None:
@@ -101,7 +106,13 @@ class SessionWrapper:
         lines = (
             ["hOn Authentication Error"]
             + [f" {i: 2d}     {resp}" for i, resp in enumerate(self._history, 1)]
-            + [" Error ".center(40, "="), text, 40 * "="]
+            + [
+                " Error ".center(40, "="),
+                text,
+                40 * "=",
+                self._history[-1].response_text,
+                40 * "=",
+            ]
         )
 
         _LOGGER.error("\n".join(lines))
