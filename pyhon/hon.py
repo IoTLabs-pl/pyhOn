@@ -1,31 +1,24 @@
 from collections.abc import Callable
-from contextlib import AsyncExitStack
-import logging
+from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
 from typing import Any
-from types import TracebackType
 
 from aiohttp import ClientSession
 from typing_extensions import Self
 
-from pyhon.appliance import HonAppliance
-from pyhon.connection.device import HonDevice
-from pyhon.const import MOBILE_ID
-from pyhon.connection.api import HonAPI, TestAPI
-from pyhon.connection.auth import HonAuth
-from pyhon.connection.mqtt import MQTTClient
-
-_LOGGER = logging.getLogger(__name__)
+from pyhon.apis.api import API, TestAPI
+from pyhon.apis.auth import Authenticator
+from pyhon.apis.mqtt import MQTTClient
+from pyhon.appliances import Appliance
 
 
-# pylint: disable=too-many-instance-attributes
 class Hon:
     def __init__(
         self,
         email: str,
         password: str,
         session: ClientSession | None = None,
-        mobile_id: str = MOBILE_ID,
+        mqtt: bool = False,
         refresh_token: str | None = None,
         test_data_path: Path | None = None,
     ):
@@ -33,46 +26,31 @@ class Hon:
         self._resources = AsyncExitStack()
         self._notify_function: Callable[[], None] | None = None
 
-        self.appliances: list[HonAppliance] = []
+        self.appliances: list[Appliance] = []
 
-        device = HonDevice(mobile_id)
-        authenticator = HonAuth(email, password, device, session, refresh_token)
+        self._auth = auth = Authenticator(email, password, session, refresh_token)
 
-        self._api = HonAPI(device, authenticator, session)
-        self._mqtt_client = MQTTClient(
-            authenticator, device, self.appliances, self.notify
+        self._api = API(auth, session)
+        self.mqtt_client = (
+            MQTTClient(auth, self.appliances, self.notify) if mqtt else nullcontext()
         )
+
+    @property
+    def is_mqtt_enabled(self) -> bool:
+        return isinstance(self.mqtt_client, MQTTClient)
 
     async def __aenter__(self) -> Self:
         return await self.setup()
 
-    async def _create_appliance(
-        self, appliance_data: dict[str, Any], api: HonAPI, zone: int = 0
-    ) -> None:
-        appliance = HonAppliance(api, appliance_data, zone=zone)
-        if appliance.mac_address == "":
-            return
-        try:
-            await appliance.load_commands()
-            await appliance.load_attributes()
-            await appliance.load_statistics()
-        except (KeyError, ValueError, IndexError) as error:
-            _LOGGER.exception(error)
-            _LOGGER.error("Device data - %s", appliance_data)
-
-        self.appliances.append(appliance)
-
     async def setup(self) -> Self:
         await self._resources.enter_async_context(self._api)
 
-        appliances = await self._api.load_appliances()
-        for appliance in appliances:
-            if (zones := int(appliance.get("zone", "0"))) > 1:
-                for zone in range(zones):
-                    await self._create_appliance(
-                        appliance.copy(), self._api, zone=zone + 1
-                    )
-            await self._create_appliance(appliance, self._api)
+        appliances_data = await self._api.load_appliances_data()
+
+        for appliance_data in appliances_data:
+            async for a in Appliance.create_from_data(self._api, appliance_data):
+                self.appliances.append(a)
+
         if (
             self._test_data_path
             and (
@@ -80,13 +58,18 @@ class Hon:
             ).exists()
             or (test_data := test_data / "..").exists()
         ):
-            api = TestAPI(test_data)
-            for appliance in await api.load_appliances():
-                await self._create_appliance(appliance, api)
+            appliances_data = await TestAPI(test_data).load_appliances()
+            for appliance_data in appliances_data:
+                async for a in Appliance.create_from_data(self._api, appliance_data):
+                    self.appliances.append(a)
 
-        await self._resources.enter_async_context(self._mqtt_client)
+        await self._resources.enter_async_context(self.mqtt_client)
 
         return self
+
+    async def close(self) -> str | None:
+        await self._resources.aclose()
+        return self._auth.refresh_token
 
     def subscribe_updates(self, notify_function: Callable[[], None]) -> None:
         self._notify_function = notify_function
@@ -95,10 +78,5 @@ class Hon:
         if self._notify_function:
             self._notify_function()
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self._resources.aclose()
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()

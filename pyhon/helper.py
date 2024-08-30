@@ -1,4 +1,4 @@
-def str_to_float(string: str | float) -> float:
+def str_to_float(string: str | float | int) -> float | int:
     try:
         return int(string)
     except ValueError:

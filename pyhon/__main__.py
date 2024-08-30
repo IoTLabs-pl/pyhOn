@@ -6,19 +6,18 @@ import logging
 import sys
 from getpass import getpass
 from pathlib import Path
-from typing import Tuple, Dict, Any
+from typing import Any, Tuple
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# pylint: disable=wrong-import-position
-from pyhon import Hon, HonAPI, diagnose, printer
+from pyhon import Hon, HonAPI, MQTTClient, diagnose, printer
 
 _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 
-def get_arguments() -> Dict[str, Any]:
+def get_arguments() -> dict[str, Any]:
     """Get parsed arguments."""
     parser = argparse.ArgumentParser(description="pyhOn: Command Line Utility")
     parser.add_argument("-u", "--user", help="user for haier hOn account")
@@ -40,6 +39,7 @@ def get_arguments() -> Dict[str, Any]:
     )
     translation.add_argument("--json", help="print as json", action="store_true")
     parser.add_argument("-i", "--import", help="import pyhon data", nargs="?")
+    parser.add_argument("--mqtt", help="start mqtt client", action="store_true")
     return vars(parser.parse_args())
 
 
@@ -59,7 +59,7 @@ async def translate(language: str, json_output: bool = False) -> None:
         print(printer.pretty_print(keys))
 
 
-def get_login_data(args: Dict[str, str]) -> Tuple[str, str]:
+def get_login_data(args: dict[str, str]) -> Tuple[str, str]:
     if not (user := args["user"]):
         user = input("User for hOn account: ")
     if not (password := args["password"]):
@@ -73,7 +73,9 @@ async def main() -> None:
         await translate(language, json_output=args.get("json", ""))
         return
     test_data_path = Path(path) if (path := args.get("import", "")) else None
-    async with Hon(*get_login_data(args), test_data_path=test_data_path) as hon:
+    async with Hon(
+        *get_login_data(args), mqtt=args["mqtt"], test_data_path=test_data_path
+    ) as hon:
         for device in hon.appliances:
             if args.get("export"):
                 anonymous = args.get("anonymous", False)
@@ -82,27 +84,29 @@ async def main() -> None:
                     for file in await diagnose.appliance_data(device, path, anonymous):
                         print(f"Created {file}")
                 else:
-                    archive = await diagnose.zip_archive(device, path, anonymous)
+                    archive = await device.zip_archive(path, anonymous)
                     print(f"Created {archive}")
                 continue
             print("=" * 10, device.appliance_type, "-", device.nick_name, "=" * 10)
+
             if args.get("keys"):
-                data = device.data.copy()
+                data = device.data_dump()
                 attr = "get" if args.get("all") else "pop"
                 print(
-                    printer.key_print(getattr(data["attributes"], attr)("parameters"))
+                    printer.key_print(getattr(data["attributes"], attr), "parameters")
                 )
-                print(printer.key_print(getattr(data, attr)("appliance")))
+                print(printer.key_print(getattr(data, attr), "appliance"))
                 print(printer.key_print(data))
                 print(
                     printer.pretty_print(
-                        printer.create_commands(device.commands, concat=True)
+                        printer.create_commands(data["commands"], concat=True)
                     )
                 )
             else:
-                print(diagnose.yaml_export(device))
+                print(device.yaml_export())
 
-        await asyncio.sleep(15)
+        if isinstance(hon.mqtt_client, MQTTClient) and hon.mqtt_client.task:
+            await hon.mqtt_client.task
 
 
 def start() -> None:

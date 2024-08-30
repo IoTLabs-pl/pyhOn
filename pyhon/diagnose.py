@@ -3,12 +3,13 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, Any
 
 from pyhon import printer
+from pyhon.commands import HonCommand
 
 if TYPE_CHECKING:
-    from pyhon.appliance import HonAppliance
+    from pyhon.appliances import Appliance
 
 
 def anonymize_data(data: str) -> str:
@@ -34,8 +35,8 @@ def anonymize_data(data: str) -> str:
     return data
 
 
-async def load_data(appliance: "HonAppliance", topic: str) -> Tuple[str, str]:
-    return topic, await getattr(appliance.api, f"load_{topic}")(appliance)
+async def load_data(appliance: "Appliance", topic: str) -> tuple[str, str]:
+    return topic, await getattr(appliance, f"load_{topic}")()
 
 
 def write_to_json(data: str, topic: str, path: Path, anonymous: bool = False) -> Path:
@@ -49,14 +50,14 @@ def write_to_json(data: str, topic: str, path: Path, anonymous: bool = False) ->
 
 
 async def appliance_data(
-    appliance: "HonAppliance", path: Path, anonymous: bool = False
-) -> List[Path]:
+    appliance: "Appliance", path: Path, anonymous: bool = False
+) -> list[Path]:
     requests = [
         "commands",
         "attributes",
         "command_history",
         "statistics",
-        "maintenance",
+        "maintenance_cycle",
         "appliance_data",
     ]
     path /= f"{appliance.appliance_type}_{appliance.model_id}".lower()
@@ -66,33 +67,29 @@ async def appliance_data(
 
 
 async def zip_archive(
-    appliance: "HonAppliance", path: Path, anonymous: bool = False
+    appliance: "Appliance", path: Path, anonymous: bool = False
 ) -> str:
     data = await appliance_data(appliance, path, anonymous)
-    archive = data[0].parent
-    shutil.make_archive(str(archive), "zip", archive)
-    shutil.rmtree(archive)
-    return f"{archive.stem}.zip"
+    archive_name = data[0].parent
+    shutil.make_archive(str(archive_name), "zip", archive_name)
+    shutil.rmtree(archive_name)
+    return f"{archive_name.stem}.zip"
 
 
-def yaml_export(appliance: "HonAppliance", anonymous: bool = False) -> str:
-    data = {
-        "attributes": appliance.attributes.copy(),
-        "appliance": appliance.info,
-        "statistics": appliance.statistics,
-        "additional_data": appliance.additional_data,
-    }
-    data |= {n: c.parameter_groups for n, c in appliance.commands.items()}
-    extra = {n: c.data for n, c in appliance.commands.items() if c.data}
+def yaml_export(data: dict[str, Any], anonymous: bool = False) -> str:
+    commands: dict[str, HonCommand] = data.pop("commands", {})
+
+    data |= {n: c.parameter_groups() for n, c in commands.items()}
+    extra = {n: c.data for n, c in commands.items() if c.data}
     if extra:
         data |= {"extra_command_data": extra}
     if anonymous:
         for sensible in ["serialNumber", "coords"]:
             data.get("appliance", {}).pop(sensible, None)
     result = printer.pretty_print({"data": data})
-    if commands := printer.create_commands(appliance.commands):
-        result += printer.pretty_print({"commands": commands})
-    if rules := printer.create_rules(appliance.commands):
+    if cmds := printer.create_commands(commands):
+        result += printer.pretty_print({"commands": cmds})
+    if rules := printer.create_rules(commands):
         result += printer.pretty_print({"rules": rules})
     if anonymous:
         result = anonymize_data(result)

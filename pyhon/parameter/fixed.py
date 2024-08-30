@@ -1,10 +1,10 @@
-from typing import Dict, Any
+from typing import Any
 
-from pyhon.parameter.base import HonParameter
+from .base import Parameter
 
 
-class HonParameterFixed(HonParameter):
-    def __init__(self, key: str, attributes: Dict[str, Any], group: str) -> None:
+class FixedParameter(Parameter):
+    def __init__(self, key: str, attributes: dict[str, Any], group: str) -> None:
         super().__init__(key, attributes, group)
         self._value: str | float = ""
         self._set_attributes()
@@ -13,8 +13,9 @@ class HonParameterFixed(HonParameter):
         super()._set_attributes()
         self._value = self._attributes.get("fixedValue", "")
 
-    def __repr__(self) -> str:
-        return f"{self.__class__} (<{self.key}> fixed)"
+    @property
+    def _allowed_values_repr(self) -> str:
+        return "fixed"
 
     @property
     def value(self) -> str | float:
@@ -25,3 +26,9 @@ class HonParameterFixed(HonParameter):
         # Fixed values seems being not so fixed as thought
         self._value = value
         self.check_trigger(value)
+
+    def more_options(self, other: Parameter) -> Parameter:
+        if not isinstance(other, FixedParameter):
+            return self
+
+        return super().more_options(other)

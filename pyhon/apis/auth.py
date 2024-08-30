@@ -1,18 +1,21 @@
-from contextlib import AsyncExitStack
 import json
-from logging import getLogger
-from re import compile as re_compile
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
+from html import unescape
+from logging import getLogger
+from re import compile as re_compile
 from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
 import aiohttp
 
-from pyhon import const, exceptions
-from pyhon.connection.device import HonDevice
-from pyhon.connection.handler.auth import AuthSessionWrapper
+from pyhon import const
+from pyhon.exceptions import HonAuthenticationError
+
+from . import device as HonDevice
+from .wrappers import AuthSessionWrapper
 
 _LOGGER = getLogger(__name__)
 
@@ -32,41 +35,31 @@ def _parse_query_string(url: str, from_fragment: bool = False) -> dict[str, str]
         query_params (dict[str,str]): Parsed query string.
     """
     splitted = urlsplit(url)
-    if from_fragment:
-        base = splitted.fragment
-    else:
-        base = splitted.query
+    base = splitted.fragment if from_fragment else splitted.query
+
     return dict(parse_qsl(base))
 
 
-@dataclass
-class _LoginData:
-    email: str | None = None
-    password: str | None = None
+def message_action_data(email: str, password: str, url: str) -> dict[str, str]:
+    action = {
+        "id": "79;a",
+        "descriptor": "apex://LightningLoginCustomController/ACTION$login",
+        "callingDescriptor": "markup://c:loginForm",
+        "params": {
+            "username": email,
+            "password": password,
+            "startUrl": _parse_query_string(url)["startURL"],
+        },
+    }
 
-    url: str | None = None
-    token_url: str | None = None
+    data = {
+        "message": {"actions": [action]},
+        "aura.context": {"mode": "PROD", "app": "siteforce:loginApp2"},
+        "aura.pageURI": url.removeprefix(const.AUTH_API_URL),
+        "aura.token": None,
+    }
 
-    @property
-    def message_action_data(self) -> dict[str, Any]:
-        if not self.email or not self.password or not self.url:
-            raise ValueError("Missing data", self.email, self.password, self.url)
-        action = {
-            "id": "79;a",
-            "descriptor": "apex://LightningLoginCustomController/ACTION$login",
-            "callingDescriptor": "markup://c:loginForm",
-            "params": {
-                "username": self.email,
-                "password": self.password,
-                "startUrl": _parse_query_string(self.url)["startURL"],
-            },
-        }
-        return {
-            "message": {"actions": [action]},
-            "aura.context": {"mode": "PROD", "app": "siteforce:loginApp2"},
-            "aura.pageURI": self.url.removeprefix(const.AUTH_API_URL),
-            "aura.token": None,
-        }
+    return {k: json.dumps(v) for k, v in data.items()}
 
 
 @dataclass
@@ -95,7 +88,9 @@ class _Tokens:
         if not redirect_uri:
             raise ValueError("No redirect URI found in HTML", html)
 
-        parsed = _parse_query_string(redirect_uri[1], from_fragment=True)
+        uri = unescape(redirect_uri[1])
+
+        parsed = _parse_query_string(uri, from_fragment=True)
         return cls.from_dict(parsed)
 
     @classmethod
@@ -128,20 +123,23 @@ class _Tokens:
         return all([self.access_token, self.id_token, self.refresh_token])
 
 
-class HonAuth:
+class Authenticator:
     def __init__(
         self,
         email: str,
         password: str,
-        device: HonDevice,
         session: aiohttp.ClientSession | None = None,
         refresh_token: str | None = None,
     ) -> None:
+        self._email = email
+        self._password = password
         self._session = AuthSessionWrapper(session)
         self._resources = AsyncExitStack()
-        self._login_data = _LoginData(email=email, password=password)
-        self._device = device
         self._tokens = _Tokens(refresh_token=refresh_token)
+
+    @property
+    def refresh_token(self) -> str | None:
+        return self._tokens.refresh_token
 
     async def _ensure_authenticated(self, force: bool = False) -> None:
         """Ensure that the user is authenticated.
@@ -149,8 +147,9 @@ class HonAuth:
         After this method is called, the access_token,
         refresh_token and id_token are guaranteed to be set.
         """
-        with self._session.session_history_tracker:
-            if not self._tokens.initialized or self._tokens.expires_soon or force:
+
+        if not self._tokens.initialized or self._tokens.expires_soon or force:
+            with self._session.history_tracker:
                 if self._tokens.refresh_token:
                     await self._refresh()
 
@@ -158,7 +157,7 @@ class HonAuth:
                     await self._retrieve_tokens()
 
             if not self._tokens.initialized:
-                raise exceptions.HonAuthenticationError("Could not authenticate")
+                raise HonAuthenticationError("Could not authenticate")
 
     async def get_access_token(self, force: bool = False) -> str:
         """Get the access token.
@@ -184,10 +183,10 @@ class HonAuth:
         Returns:
             cognito_token (str): The Cognito token.
         """
-        with self._session.session_history_tracker:
-            if not self._tokens.cognito_token or force:
+        if not self._tokens.cognito_token or force:
+            with self._session.history_tracker:
                 await self._retrieve_cognito_token()
-            return cast(str, self._tokens.cognito_token)
+        return cast(str, self._tokens.cognito_token)
 
     async def get_iot_core_token(self, force: bool = False) -> str:
         """Get the IoT Core token.
@@ -195,12 +194,18 @@ class HonAuth:
         Returns:
             iot_core_token (str): The AWS IoT Core token.
         """
-        with self._session.session_history_tracker:
-            if not self._tokens.iot_core_token or force:
+        if not self._tokens.iot_core_token or force:
+            with self._session.history_tracker:
                 await self._retrieve_iot_core_token()
-            return cast(str, self._tokens.iot_core_token)
+        return cast(str, self._tokens.iot_core_token)
 
-    async def _authorize(self) -> None:
+    async def _authorize(self) -> str | None:
+        """Authorize the hOn account.
+
+        Returns:
+            url (str|None): The URL to login to the hOn account or
+            None if the user is already authorized.
+        """
         self._tokens = _Tokens()
         self._session.clear_cookies()
 
@@ -224,76 +229,68 @@ class HonAuth:
             except ValueError:
                 pass
             else:
-                return
+                return None
 
             login_url = _HREF_REGEX.search(text)
-
             if not login_url:
-                raise exceptions.HonAuthenticationError("No login URL found")
+                raise HonAuthenticationError("No login URL found")
 
-            if login_url[1].startswith("/NewhOnLogin"):
-                self._login_data.url = f"{const.AUTH_API_URL}/s/login{login_url[1]}"
-            else:
-                self._login_data.url = login_url[1]
+            url = login_url[1]
+            if url.startswith("/NewhOnLogin"):
+                url = f"{const.AUTH_API_URL}/s/login{url}"
 
-    async def _login(self) -> None:
-        """Login to the hOn account. Retrieve the token_url."""
-        await self._authorize()
+            return url
 
-        if self._tokens.initialized:
-            return
+    async def _login(self) -> str | None:
+        """Login to the hOn account. Retrieve the token_url.
 
-        _LOGGER.debug("Logging in")
-        async with self._session.post(
-            f"{const.AUTH_API_URL}/s/sfsites/aura",
-            data={
-                k: json.dumps(v)
-                for k, v in self._login_data.message_action_data.items()
-            },
-            params={"r": 3, "other.LightningLoginCustom.login": 1},
-        ) as response:
-            result = await response.json()
-            token_url = result["events"][0]["attributes"]["values"]["url"]
-            self._login_data.token_url = token_url
+        Returns:
+            token_url (str|None): The URL to retrieve the tokens or
+            None if the user is already logged in.
+        """
+        if login_url := await self._authorize():
+            _LOGGER.debug("Logging in")
+            async with self._session.post(
+                f"{const.AUTH_API_URL}/s/sfsites/aura",
+                data=message_action_data(self._email, self._password, login_url),
+                params={"r": 3, "other.LightningLoginCustom.login": 1},
+            ) as response:
+                result = await response.json()
+                token_url: str = result["events"][0]["attributes"]["values"]["url"]
+                return token_url
+
+        return None
 
     async def _retrieve_tokens(self) -> None:
         """Retrieve the access_token, id_token and refresh_token from the token_url."""
-        await self._login()
+        if url := await self._login():
+            _LOGGER.debug("Getting tokens")
+            for _ in range(2):
+                async with self._session.get(url) as response:
+                    url_match = _HREF_REGEX.search(await response.text())
+                    if not url_match:
+                        raise HonAuthenticationError("No URL found in response")
+                    url = url_match[1]
+                    if "ProgressiveLogin" not in url:
+                        break
 
-        if self._tokens.initialized:
-            return
-
-        _LOGGER.debug("Getting tokens")
-        url = self._login_data.token_url
-        for _ in range(2):
-            async with self._session.get(url) as response:
-                url_search = _HREF_REGEX.search(await response.text())
-                if not url_search:
-                    raise exceptions.HonAuthenticationError("No URL found in response")
-
-                url = url_search[1]
-                if "ProgressiveLogin" not in url:
-                    break
-
-        async with self._session.get(f"{const.AUTH_API_URL}{url}") as response:
-            self._tokens = _Tokens.from_html(await response.text())
+            async with self._session.get(f"{const.AUTH_API_URL}{url}") as response:
+                self._tokens = _Tokens.from_html(await response.text())
 
     async def _retrieve_cognito_token(self) -> None:
         """Retrieve the Cognito token."""
-        await self._ensure_authenticated()
 
         _LOGGER.debug("Trying to retrieve Cognito token")
         async with self._session.post(
             f"{const.API_URL}/auth/v1/login",
             headers={"id-token": await self.get_id_token()},
-            json=self._device.get(),
+            json=HonDevice.descriptor(),
         ) as response:
             token = (await response.json())["cognitoUser"]["Token"]
             self._tokens.cognito_token = token
 
     async def _retrieve_iot_core_token(self) -> None:
         """Retrieve the IoT Core token."""
-        await self._ensure_authenticated()
 
         _LOGGER.debug("Trying to retrieve IoT Core token")
         async with self._session.get(
@@ -308,16 +305,18 @@ class HonAuth:
 
     async def _refresh(self) -> None:
         try:
+            refresh_token = self._tokens.refresh_token
             async with self._session.post(
                 f"{const.AUTH_API_URL}/services/oauth2/token",
                 params={
                     "client_id": const.CLIENT_ID,
-                    "refresh_token": self._tokens.refresh_token,
+                    "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
             ) as response:
                 data = await response.json()
                 self._tokens = _Tokens.from_dict(data)
+                self._tokens.refresh_token = refresh_token
         except aiohttp.ClientResponseError as e:
             _LOGGER.warning(
                 "Failed to obtain access token with refresh token: [%s] %s",
@@ -325,7 +324,7 @@ class HonAuth:
                 e.message,
             )
 
-    async def __aenter__(self) -> "HonAuth":
+    async def __aenter__(self) -> "Authenticator":
         await self._resources.enter_async_context(self._session)
         return self
 

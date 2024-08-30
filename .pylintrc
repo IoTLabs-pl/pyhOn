@@ -1,9 +1,0 @@
-[MESSAGES CONTROL]
-
-disable=missing-docstring, fixme
-
-[FORMAT]
-
-max-args=7
-max-attributes=8
-max-line-length=88

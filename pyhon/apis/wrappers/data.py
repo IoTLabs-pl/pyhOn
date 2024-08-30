@@ -1,20 +1,19 @@
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
-from pyhon.connection.auth import HonAuth
-from pyhon.connection.handler.base import SessionWrapper, SessionWrapperMethod
+from ._base import SessionWrapper, SessionWrapperMethod
 
-_LOGGER = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from pyhon.apis.auth import Authenticator
 
 
 class DataSessionWrapper(SessionWrapper):
     def __init__(
         self,
-        auth: HonAuth,
+        auth: "Authenticator",
         session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(session=session)
@@ -33,10 +32,9 @@ class DataSessionWrapper(SessionWrapper):
         return self
 
     @asynccontextmanager
-    async def _request(
+    async def request(
         self, method: SessionWrapperMethod, *args: Any, **kwargs: Any
     ) -> AsyncIterator[aiohttp.ClientResponse]:
-
-        async with super()._request(method, *args, **kwargs) as response:
+        async with super().request(method, *args, **kwargs) as response:
             await response.json()  # Throws exception if response is not JSON
             yield response
