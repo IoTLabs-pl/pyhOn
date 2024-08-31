@@ -105,7 +105,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def _connection_handler(
         appliance: "Appliance", connection_status: bool, __message: "Message"
     ) -> None:
-        appliance.attributes["parameters"]["connection"].update(connection_status)
+        appliance.attributes["parameters"]["connected"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
         self.task = None
