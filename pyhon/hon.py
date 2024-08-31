@@ -28,7 +28,7 @@ class Hon:
 
         self.appliances: list[Appliance] = []
 
-        self._auth = auth = Authenticator(email, password, session, refresh_token)
+        self.auth = auth = Authenticator(email, password, session, refresh_token)
 
         self._api = API(auth, session)
         self.mqtt_client = (
@@ -67,9 +67,8 @@ class Hon:
 
         return self
 
-    async def aclose(self) -> str | None:
-        await self._resources.aclose()
-        return self._auth.refresh_token
+    async def aclose(self) -> None:
+        return await self._resources.aclose()
 
     def subscribe_updates(self, notify_function: Callable[[], None]) -> None:
         self._notify_function = notify_function
