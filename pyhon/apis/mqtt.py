@@ -95,7 +95,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def _status_handler(appliance: "Appliance", message: "Message") -> None:
         payload = _Payload(json.loads(cast(str | bytes | bytearray, message.payload)))
         for parameter in payload["parameters"]:
-            appliance.attributes["parameters"][parameter["parName"]].update(parameter)
+            appliance.attributes[parameter["parName"]].update(parameter)
         appliance.sync_params_to_command("settings")
 
         _LOGGER.debug("On topic '%s' received: \n %s", message.topic, payload)
@@ -104,7 +104,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def _connection_handler(
         appliance: "Appliance", connection_status: bool, __message: "Message"
     ) -> None:
-        appliance.attributes["parameters"]["connected"].update(connection_status)
+        appliance.attributes["connected"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
         self.task = None

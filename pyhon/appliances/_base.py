@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from pprint import pformat
@@ -41,57 +41,49 @@ class Throttle(Generic[T]):
 # pylint: disable=too-many-public-methods,too-many-instance-attributes
 class Appliance:
     def __init__(self, api: "API", appliance_data: dict[str, Any]) -> None:
-        print(*appliance_data.get("attributes"), sep="\n")
-        if attributes := appliance_data.get("attributes"):
-            appliance_data["attributes"] = {
-                v["parName"]: v["parValue"] for v in attributes
-            }
-        self.data: dict[str, Any] = appliance_data
-        self._api = api
+
+        self.data: dict[str, Any] = {
+            k: v for k, v in appliance_data.items() if k != "attributes"
+        }
+        self.attributes: dict[str, Attribute] = {
+            v["parName"]: Attribute(v["parValue"])
+            for v in appliance_data.get("attributes", [])
+        }
 
         self.commands: dict[str, HonCommand] = {}
         self.statistics: dict[str, Any] = {}
         self.maintenance_cycle: dict[str, Any] = {}
-        self.attributes: dict[str, Attribute] = {}
         self.options: dict[str, Any] = {}
 
         self.additional_data: dict[str, Any] = {}
 
+        self._api = api
+
     @classmethod
     async def create_from_data(
         cls, api: "API", appliance_data: dict[str, Any]
-    ) -> AsyncGenerator["Appliance", None]:
+    ) -> "Appliance":
         """Create appliance object from API data."""
         appliance_type: str = appliance_data.get("applianceTypeName", "")
         target_classes = {cast(str, c.appliance_type): c for c in cls.__subclasses__()}
         target_cls: type[Appliance] = target_classes.get(appliance_type, cls)
 
         appliance = target_cls(api, appliance_data)
-        if appliance.mac_address:
-            try:
-                await appliance.load_commands()
-                await appliance.load_command_history()
-                await appliance.load_favourites()
+        try:
+            await appliance.load_commands()
+            await appliance.load_command_history()
+            await appliance.load_favourites()
 
-                await appliance.load_attributes()
-                await appliance.load_statistics()
-                await appliance.load_maintenance_cycle()
-            except (KeyError, ValueError, IndexError) as error:
-                _LOGGER.exception(error)
-                _LOGGER.error("Device data - %s", appliance_data)
-            finally:
-                return appliance
+            await appliance.load_attributes()
+            await appliance.load_statistics()
+            await appliance.load_maintenance_cycle()
+        except (KeyError, ValueError, IndexError) as error:
+            _LOGGER.exception(error)
+            _LOGGER.error("Device data - %s", appliance_data)
+        finally:
+            return appliance
 
     def __getitem__(self, item: str) -> Any:  # noqa: C901
-        if item in {
-            "attributes",
-            "data",
-            "statistics",
-            "maintenance_cycle",
-            "additional_data",
-        }:
-            return getattr(self, item)
-
         if "." in item:
             path = item.split(".")
             result = self[path[0]]
@@ -104,8 +96,8 @@ class Appliance:
                 except (ValueError, KeyError):
                     result = result[key]
             return result
-        if item in self.attributes["parameters"]:
-            return self.attributes["parameters"][item].value
+        elif item in self.attributes:
+            return self.attributes[item].value
 
         raise KeyError(f'Key not found: "{item}"')
 
@@ -135,25 +127,19 @@ class Appliance:
 
     @property
     def model_name(self) -> str:
-        return self.data.get("modelName")
+        return str(self.data.get("modelName"))
 
     @property
     def brand(self) -> str:
-        return self.data.get("brand").capitalize()
+        return str(self.data.get("brand")).capitalize()
 
     @property
-    def nick_name(self) -> str:
-        if result := self.data("nickName"):
-            return result
-        return self.model_name
+    def nick_name(self) -> str | None:
+        return self.data.get("nickName")
 
     @property
-    def code(self) -> str:
-        if code := self.data.get("code"):
-            return cast(str, code)
-
-        serial_number: str = self.data.get("serialNumber", "")
-        return serial_number[:8] if len(serial_number) < 18 else serial_number[:11]
+    def code(self) -> str | None:
+        return self.data.get("code")
 
     @property
     def model_id(self) -> int:
@@ -174,11 +160,7 @@ class Appliance:
 
     @property
     def available_settings(self) -> list[str]:
-        return [
-            f"{name}.{key}"
-            for name, command in self.commands.items()
-            for key in command.setting_keys
-        ]
+        return list(self.settings.keys())
 
     def data_dump(self) -> dict[str, Any]:
         return {
@@ -201,18 +183,14 @@ class Appliance:
 
     def sync_command_to_params(self, command_name: str) -> None:
         if command := self.commands.get(command_name):
-            for key in self.attributes.get("parameters", {}):
+            for key in self.attributes:
                 if new := command.parameters.get(key):
-                    self.attributes["parameters"][key].update(
-                        new.intern_value, shield=True
-                    )
+                    self.attributes[key].update(new.intern_value, shield=True)
 
     def sync_params_to_command(self, command_name: str) -> None:
         if command := self.commands.get(command_name):
             for key in command.setting_keys:
-                if (
-                    new := self.attributes.get("parameters", {}).get(key)
-                ) is not None and new.value != "":
+                if (new := self.attributes.get(key)) is not None and new.value != "":
                     setting = command.parameters[key]
                     try:
                         if not isinstance(setting, RangeParameter):
@@ -281,28 +259,6 @@ class Appliance:
 
         add_favourites(self.commands, favourites)
 
-    # TODO: Method not used
-    async def load_last_activity(self) -> dict[str, Any]:
-        return cast(
-            dict[str, Any],
-            await self._api.call(
-                "retrieve-last-activity",
-                params={"macAddress": self.mac_address},
-                response_path=("attributes",),
-            ),
-        )
-
-    # TODO: Method not used
-    async def load_appliance_data(self) -> dict[str, Any]:
-        return cast(
-            dict[str, Any],
-            await self._api.call(
-                "appliance-model",
-                params={"code": self.code, "macAddress": self.mac_address},
-                response_path=("payload", "applianceModel"),
-            ),
-        )
-
     async def load_attributes(self) -> dict[str, Any]:
         payload: dict[str, Any] = await self._api.call(
             "context",
@@ -313,23 +269,24 @@ class Appliance:
             },
         )
 
-        self_params = self.attributes.setdefault("parameters", {})
-        for name, values in payload.get("shadow", {}).get("parameters", {}).items():
-            if name in self_params:
-                self_params[name].update(values)
-            else:
-                self_params[name] = Attribute(values)
+        attributes = self.attributes
 
-        program = int(self_params.get("prCode", "0"))
+        for name, values in payload.get("shadow", {}).get("parameters", {}).items():
+            if name in attributes:
+                attributes[name].update(values)
+            else:
+                attributes[name] = Attribute(values)
+
+        program = int(attributes.get("prCode", "0"))
         cmd = self.settings.get("startProgram.program")
 
         program_name = "No Program"
         if program and isinstance(cmd, ProgramParameter):
             program_name = cmd.ids.get(program, program_name)
 
-        self_params["programName"] = Attribute(program_name)
+        attributes["programName"] = Attribute(program_name)
 
-        self_params["connected"] = Attribute(
+        attributes["connected"] = Attribute(
             payload.get("lastConnEvent", {}).get("category") != "DISCONNECTED"
         )
 
@@ -389,13 +346,13 @@ class Appliance:
 class MachModeActivityMixin(Appliance):
     async def load_attributes(self) -> dict[str, Any]:
         payload = await super().load_attributes()
-        params = self.attributes["parameters"]
+        attributes = self.attributes
 
-        if params["connected"] == 0:
-            params["machMode"].update(0)
-        params["active"] = Attribute(bool(payload.get("activity")))
+        if attributes["connected"] == 0:
+            attributes["machMode"].update(0)
+        attributes["active"] = Attribute(bool(payload.get("activity")))
 
-        params["pause"] = Attribute(params["machMode"] == 3)
+        attributes["pause"] = Attribute(attributes["machMode"] == 3)
 
         return payload
 
@@ -403,6 +360,6 @@ class MachModeActivityMixin(Appliance):
 class ActiveFromOnOffStatusMixin(Appliance):
     async def load_attributes(self) -> dict[str, Any]:
         payload = await super().load_attributes()
-        params = self.attributes["parameters"]
-        params["active"] = Attribute(params["onOffStatus"] == 1)
+        attributes = self.attributes
+        attributes["active"] = Attribute(attributes["onOffStatus"] == 1)
         return payload

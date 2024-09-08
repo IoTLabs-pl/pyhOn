@@ -28,7 +28,7 @@ class SessionWrapper:
 
     @property
     @asynccontextmanager
-    async def history_tracker(self) -> AsyncGenerator[None, None, None]:
+    async def history_tracker(self) -> AsyncGenerator[None]:
         if self._history_tracking:
             yield
         else:
