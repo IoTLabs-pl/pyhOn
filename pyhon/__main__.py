@@ -6,7 +6,7 @@ import logging
 import sys
 from getpass import getpass
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -59,7 +59,7 @@ async def translate(language: str, json_output: bool = False) -> None:
         print(printer.pretty_print(keys))
 
 
-def get_login_data(args: dict[str, str]) -> Tuple[str, str]:
+def get_login_data(args: dict[str, str]) -> tuple[str, str]:
     if not (user := args["user"]):
         user = input("User for hOn account: ")
     if not (password := args["password"]):

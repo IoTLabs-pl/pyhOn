@@ -17,7 +17,7 @@ class HonRule:
 
 class HonRuleSet:
     def __init__(self, command: "HonCommand", rule: dict[str, Any]):
-        self._command: "HonCommand" = command
+        self._command: HonCommand = command
         self._rules: dict[str, list[HonRule]] = {}
         self._parse_rule(rule)
 

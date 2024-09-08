@@ -3,10 +3,11 @@ import json
 import logging
 import pprint
 import ssl
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import TYPE_CHECKING, Any, AsyncIterator, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
 import backoff
@@ -17,7 +18,7 @@ from pyhon import const
 from pyhon.apis import device as HonDevice
 
 if TYPE_CHECKING:
-    from typing import Callable
+    from collections.abc import Callable
 
     from aiomqtt import Message
 
@@ -64,9 +65,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     async def _get_mqtt_username(self) -> str:
         query_params = {
             "x-amz-customauthorizer-name": const.MQTT_AUTHORIZER,
-            "x-amz-customauthorizer-signature": await self._auth.get_iot_core_token(
-                force=True
-            ),
+            "x-amz-customauthorizer-signature": await self._auth.get_iot_core_token(),
             "token": await self._auth.get_id_token(),
         }
         return "?" + urlencode(query_params)
@@ -96,7 +95,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def _status_handler(appliance: "Appliance", message: "Message") -> None:
         payload = _Payload(json.loads(cast(str | bytes | bytearray, message.payload)))
         for parameter in payload["parameters"]:
-            appliance.attributes["parameters"][parameter["parName"]].update(parameter)
+            appliance.attributes[parameter["parName"]].update(parameter)
         appliance.sync_params_to_command("settings")
 
         _LOGGER.debug("On topic '%s' received: \n %s", message.topic, payload)
@@ -105,7 +104,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     def _connection_handler(
         appliance: "Appliance", connection_status: bool, __message: "Message"
     ) -> None:
-        appliance.attributes["parameters"]["connected"].update(connection_status)
+        appliance.attributes["connected"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
         self.task = None

@@ -26,8 +26,8 @@ class HonCommand:
         categories: dict[str, "HonCommand"] | None = None,
     ):
         self._name: str = name
-        self._appliance: "Appliance" = appliance
-        self._categories: dict[str, "HonCommand"] | None = categories
+        self._appliance: Appliance = appliance
+        self._categories: dict[str, HonCommand] | None = categories
         self._category_name: str = category_name
         self._parameters: dict[str, Parameter] = {}
         self._data: dict[str, Any] = {}
@@ -78,8 +78,9 @@ class HonCommand:
     def _create_parameters(
         self, data: dict[str, Any], name: str, parameter: str
     ) -> None:
-        if name == "zoneMap" and self._appliance.zone:
-            data["default"] = self._appliance.zone
+        # TODO: Fix zones
+        # if name == "zoneMap" and self._appliance.zone:
+        #     data["default"] = self._appliance.zone
         if data.get("category") == "rule":
             if "fixedValue" in data:
                 self._rules.append(HonRuleSet(self, data["fixedValue"]))

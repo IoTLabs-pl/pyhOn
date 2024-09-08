@@ -1,4 +1,0 @@
-lint.extend-select = [
-    "I", # Imports
-    "SLF001", # Private member access
-  ]

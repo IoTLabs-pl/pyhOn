@@ -16,7 +16,7 @@ class ProgramParameter(EnumParameter):
             self._value = command.category.rsplit(".", 1)[-1].lower()
         else:
             self._value = command.category
-        self._programs: dict[str, "HonCommand"] = command.categories
+        self._programs: dict[str, HonCommand] = command.categories
         self._typology: str = "enum"
 
     @property

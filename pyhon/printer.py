@@ -29,7 +29,7 @@ def pretty_print(
 ) -> str:
     result = ""
     space = whitespace * intend
-    if isinstance(data, (dict, list)) and key:
+    if isinstance(data, dict | list) and key:
         result += f"{space}{'- ' if is_list else ''}{key}:\n"
         intend += 1
     if isinstance(data, list):

@@ -1,4 +1,6 @@
 mypy>=0.991
+pytest>=8.3.2
+pytest-asyncio>=0.24.0
 ruff>=0.6.3
 setuptools>=62.3
 types-paho-mqtt>=1.6

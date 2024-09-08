@@ -8,12 +8,12 @@ class Oven(ActiveFromOnOffStatusMixin, Appliance):
 
     async def load_attributes(self) -> dict[str, Any]:
         payload = await super().load_attributes()
-        params = self.attributes["parameters"]
+        attributes = self.attributes
 
-        if params["connected"] == 0:
-            params["temp"].update(0)
-            params["onOffStatus"].update(0)
-            params["remoteCtrValid"].update(0)
-            params["remainingTimeMM"].update(0)
+        if attributes["connected"] == 0:
+            attributes["temp"].update(0)
+            attributes["onOffStatus"].update(0)
+            attributes["remoteCtrValid"].update(0)
+            attributes["remainingTimeMM"].update(0)
 
         return payload
