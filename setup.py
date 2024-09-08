@@ -2,13 +2,13 @@
 
 from setuptools import find_packages, setup
 
-with open("README.md", "r", encoding="utf-8") as f:
+with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
-with open("requirements.txt", "r", encoding="utf-8") as f:
+with open("requirements.txt", encoding="utf-8") as f:
     install_requires = f.read().splitlines()
 
-with open("pyhon/__version__.py", "r", encoding="utf-8") as f:
+with open("pyhon/__version__.py", encoding="utf-8") as f:
     _, _, version = f.read().partition("=")
     version = version.strip().strip("'\"")
 
@@ -26,7 +26,7 @@ setup(
     platforms="any",
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     install_requires=install_requires,
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -34,7 +34,6 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Natural Language :: English",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Topic :: Software Development :: Libraries :: Python Modules",

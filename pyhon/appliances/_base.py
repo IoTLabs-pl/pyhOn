@@ -1,9 +1,9 @@
 import logging
-import sys
 from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from pprint import pformat
-from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from pyhon import const, diagnose, exceptions
 from pyhon.apis import device as HonDevice
@@ -11,13 +11,6 @@ from pyhon.attributes import Attribute
 from pyhon.command_loader import add_favourites, loader, recover_last_command_states
 from pyhon.commands import HonCommand
 from pyhon.parameter import Parameter, ProgramParameter, RangeParameter
-
-if sys.version_info >= (3, 11):
-    from datetime import UTC, datetime, timedelta
-else:
-    from datetime import datetime, timedelta, timezone
-
-    UTC = timezone.utc
 
 if TYPE_CHECKING:
     from pyhon.apis import API
@@ -47,9 +40,8 @@ class Throttle(Generic[T]):
 
 # pylint: disable=too-many-public-methods,too-many-instance-attributes
 class Appliance:
-    def __init__(
-        self, api: "API", appliance_data: dict[str, Any], zone: int = 0
-    ) -> None:
+    def __init__(self, api: "API", appliance_data: dict[str, Any]) -> None:
+        print(*appliance_data.get("attributes"), sep="\n")
         if attributes := appliance_data.get("attributes"):
             appliance_data["attributes"] = {
                 v["parName"]: v["parValue"] for v in attributes
@@ -60,9 +52,8 @@ class Appliance:
         self.commands: dict[str, HonCommand] = {}
         self.statistics: dict[str, Any] = {}
         self.maintenance_cycle: dict[str, Any] = {}
-        self.attributes: dict[str, Any] = {}
+        self.attributes: dict[str, Attribute] = {}
         self.options: dict[str, Any] = {}
-        self.zone: Final[int] = zone
 
         self.additional_data: dict[str, Any] = {}
 
@@ -70,29 +61,26 @@ class Appliance:
     async def create_from_data(
         cls, api: "API", appliance_data: dict[str, Any]
     ) -> AsyncGenerator["Appliance", None]:
-        """Create appliance objects from API data.
-        There may be multiple appliances in the data if zones are present.
-        """
+        """Create appliance object from API data."""
         appliance_type: str = appliance_data.get("applianceTypeName", "")
         target_classes = {cast(str, c.appliance_type): c for c in cls.__subclasses__()}
-        target_cls: type["Appliance"] = target_classes.get(appliance_type, cls)
+        target_cls: type[Appliance] = target_classes.get(appliance_type, cls)
 
-        for zone in range(int(appliance_data.get("zone", "1"))):
-            appliance = target_cls(api, appliance_data, zone=zone)
-            if appliance.mac_address:
-                try:
-                    await appliance.load_commands()
-                    await appliance.load_command_history()
-                    await appliance.load_favourites()
+        appliance = target_cls(api, appliance_data)
+        if appliance.mac_address:
+            try:
+                await appliance.load_commands()
+                await appliance.load_command_history()
+                await appliance.load_favourites()
 
-                    await appliance.load_attributes()
-                    await appliance.load_statistics()
-                    await appliance.load_maintenance_cycle()
-                except (KeyError, ValueError, IndexError) as error:
-                    _LOGGER.exception(error)
-                    _LOGGER.error("Device data - %s", appliance_data)
-                finally:
-                    yield appliance
+                await appliance.load_attributes()
+                await appliance.load_statistics()
+                await appliance.load_maintenance_cycle()
+            except (KeyError, ValueError, IndexError) as error:
+                _LOGGER.exception(error)
+                _LOGGER.error("Device data - %s", appliance_data)
+            finally:
+                return appliance
 
     def __getitem__(self, item: str) -> Any:  # noqa: C901
         if item in {
@@ -104,8 +92,6 @@ class Appliance:
         }:
             return getattr(self, item)
 
-        if self.zone:
-            item += f"Z{self.zone}"
         if "." in item:
             path = item.split(".")
             result = self[path[0]]
@@ -135,13 +121,6 @@ class Appliance:
         except (KeyError, IndexError):
             return default
 
-    def _check_name_zone(self, name: str, frontend: bool = True) -> str:
-        attribute: str = self.data.get(name, "")
-        if attribute and self.zone:
-            zone = " Z" if frontend else "_z"
-            return f"{attribute}{zone}{self.zone}"
-        return attribute
-
     @property
     def appliance_model_id(self) -> str:
         return str(self.data.get("applianceModelId", ""))
@@ -155,27 +134,18 @@ class Appliance:
         return str(self.data.get("macAddress", ""))
 
     @property
-    def unique_id(self) -> str:
-        default_mac = "xx-xx-xx-xx-xx-xx"
-        import_name = f"{self.appliance_type.lower()}_{self.appliance_model_id}"
-        result = self._check_name_zone("macAddress", frontend=False)
-        result = result.replace(default_mac, import_name)
-        return result
-
-    @property
     def model_name(self) -> str:
-        return self._check_name_zone("modelName")
+        return self.data.get("modelName")
 
     @property
     def brand(self) -> str:
-        return self._check_name_zone("brand").capitalize()
+        return self.data.get("brand").capitalize()
 
     @property
     def nick_name(self) -> str:
-        result = self._check_name_zone("nickName")
-        if not result or set("xX1\r\n\t\f\v-").issuperset(result):
-            return self.model_name
-        return result
+        if result := self.data("nickName"):
+            return result
+        return self.model_name
 
     @property
     def code(self) -> str:

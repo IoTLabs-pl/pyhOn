@@ -1,14 +1,11 @@
 from collections.abc import Callable
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from aiohttp import ClientSession
-from typing_extensions import Self
 
-from pyhon.apis.api import API, TestAPI
-from pyhon.apis.auth import Authenticator
-from pyhon.apis.mqtt import MQTTClient
+from pyhon.apis import API, Authenticator, MQTTClient
 from pyhon.appliances import Appliance
 
 
@@ -47,21 +44,12 @@ class Hon:
 
         appliances_data = await self._api.load_appliances_data()
 
-        for appliance_data in appliances_data:
-            async for a in Appliance.create_from_data(self._api, appliance_data):
-                self.appliances.append(a)
-
-        if (
-            self._test_data_path
-            and (
-                test_data := self._test_data_path / "hon-test-data" / "test_data"
-            ).exists()
-            or (test_data := test_data / "..").exists()
-        ):
-            appliances_data = await TestAPI(test_data).load_appliances()
-            for appliance_data in appliances_data:
-                async for a in Appliance.create_from_data(self._api, appliance_data):
-                    self.appliances.append(a)
+        self.appliances.extend(
+            [
+                await Appliance.create_from_data(self._api, appliance_data)
+                for appliance_data in appliances_data
+            ]
+        )
 
         await self._resources.enter_async_context(self.mqtt_client)
 

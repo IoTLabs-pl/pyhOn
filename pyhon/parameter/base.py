@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyhon.rules import HonRule
@@ -15,7 +16,7 @@ class Parameter:
         self._value: str | float = ""
         self._group: str = group
         self._triggers: dict[
-            str, list[tuple[Callable[["HonRule"], None], "HonRule"]]
+            str, list[tuple[Callable[[HonRule], None], HonRule]]
         ] = {}
         self._set_attributes()
 

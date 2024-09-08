@@ -3,10 +3,11 @@ import json
 import logging
 import pprint
 import ssl
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import cached_property, partial
-from typing import TYPE_CHECKING, Any, AsyncIterator, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
 import backoff
@@ -17,7 +18,7 @@ from pyhon import const
 from pyhon.apis import device as HonDevice
 
 if TYPE_CHECKING:
-    from typing import Callable
+    from collections.abc import Callable
 
     from aiomqtt import Message
 
@@ -64,9 +65,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     async def _get_mqtt_username(self) -> str:
         query_params = {
             "x-amz-customauthorizer-name": const.MQTT_AUTHORIZER,
-            "x-amz-customauthorizer-signature": await self._auth.get_iot_core_token(
-                force=True
-            ),
+            "x-amz-customauthorizer-signature": await self._auth.get_iot_core_token(),
             "token": await self._auth.get_id_token(),
         }
         return "?" + urlencode(query_params)

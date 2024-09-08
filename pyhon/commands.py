@@ -26,8 +26,8 @@ class HonCommand:
         categories: dict[str, "HonCommand"] | None = None,
     ):
         self._name: str = name
-        self._appliance: "Appliance" = appliance
-        self._categories: dict[str, "HonCommand"] | None = categories
+        self._appliance: Appliance = appliance
+        self._categories: dict[str, HonCommand] | None = categories
         self._category_name: str = category_name
         self._parameters: dict[str, Parameter] = {}
         self._data: dict[str, Any] = {}

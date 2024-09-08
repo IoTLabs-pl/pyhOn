@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Final, Optional
+from typing import Final
 
 from pyhon.helper import str_to_float
 
@@ -9,8 +9,8 @@ class Attribute:
 
     def __init__(self, data: dict[str, str] | str | int | bool):
         self._value: str = ""
-        self._last_update: Optional[datetime] = None
-        self._lock_timestamp: Optional[datetime] = None
+        self._last_update: datetime | None = None
+        self._lock_timestamp: datetime | None = None
         self.update(data)
 
     def __int__(self) -> int:
@@ -32,7 +32,7 @@ class Attribute:
         self._value = value
 
     @property
-    def last_update(self) -> Optional[datetime]:
+    def last_update(self) -> datetime | None:
         """Timestamp of last api update"""
         return self._last_update
 

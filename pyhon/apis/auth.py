@@ -149,7 +149,7 @@ class Authenticator:
         """
 
         if not self._tokens.initialized or self._tokens.expires_soon or force:
-            with self._session.history_tracker:
+            async with self._session.history_tracker:
                 if self._tokens.refresh_token:
                     await self._refresh()
 
@@ -184,7 +184,7 @@ class Authenticator:
             cognito_token (str): The Cognito token.
         """
         if not self._tokens.cognito_token or force:
-            with self._session.history_tracker:
+            async with self._session.history_tracker:
                 await self._retrieve_cognito_token()
         return cast(str, self._tokens.cognito_token)
 
@@ -195,8 +195,8 @@ class Authenticator:
             iot_core_token (str): The AWS IoT Core token.
         """
         if not self._tokens.iot_core_token or force:
-            with self._session.history_tracker:
-                await self._retrieve_iot_core_token()
+            async with self._session.history_tracker:
+                await self._retrieve_cognito_token()
         return cast(str, self._tokens.iot_core_token)
 
     async def _authorize(self) -> str | None:
@@ -286,21 +286,11 @@ class Authenticator:
             headers={"id-token": await self.get_id_token()},
             json=HonDevice.descriptor(),
         ) as response:
-            token = (await response.json())["cognitoUser"]["Token"]
-            self._tokens.cognito_token = token
+            response_data = await response.json()
+            cognito_token = response_data["cognitoUser"]["Token"]
+            self._tokens.cognito_token = cognito_token
 
-    async def _retrieve_iot_core_token(self) -> None:
-        """Retrieve the IoT Core token."""
-
-        _LOGGER.debug("Trying to retrieve IoT Core token")
-        async with self._session.get(
-            f"{const.API_URL}/auth/v1/introspection",
-            headers={
-                "cognito-token": await self.get_cognito_token(),
-                "id-token": await self.get_id_token(),
-            },
-        ) as response:
-            iot_core_token = (await response.json())["payload"]["tokenSigned"]
+            iot_core_token = response_data["tokenSigned"]
             self._tokens.iot_core_token = iot_core_token
 
     async def _refresh(self) -> None:
