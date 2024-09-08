@@ -1,17 +1,14 @@
-import json
 import logging
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
-from pathlib import Path
 from types import TracebackType
-from typing import Any, Self, cast, no_type_check
+from typing import Any, Self, cast
 
 from aiohttp import ClientSession
 
 from pyhon import const, exceptions
 from pyhon.apis.auth import Authenticator
 from pyhon.apis.wrappers import AnonymousSessionWrapper, DataSessionWrapper
-from pyhon.appliances import Appliance
 
 _LOGGER = logging.getLogger(__name__)
 
