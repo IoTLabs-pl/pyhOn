@@ -41,7 +41,6 @@ class Throttle(Generic[T]):
 # pylint: disable=too-many-public-methods,too-many-instance-attributes
 class Appliance:
     def __init__(self, api: "API", appliance_data: dict[str, Any]) -> None:
-
         self.data: dict[str, Any] = {
             k: v for k, v in appliance_data.items() if k != "attributes"
         }

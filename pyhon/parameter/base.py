@@ -15,9 +15,7 @@ class Parameter:
         self._mandatory: int = 0
         self._value: str | float = ""
         self._group: str = group
-        self._triggers: dict[
-            str, list[tuple[Callable[[HonRule], None], HonRule]]
-        ] = {}
+        self._triggers: dict[str, list[tuple[Callable[[HonRule], None], HonRule]]] = {}
         self._set_attributes()
 
     def _set_attributes(self) -> None:

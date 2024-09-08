@@ -20,9 +20,7 @@ class Loader:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc):
-
     if "mock_api" in metafunc.fixturenames:
-
         test_data_dir = Path(__file__).parent / "hon-test-data" / "test_data"
 
         test_data = {
