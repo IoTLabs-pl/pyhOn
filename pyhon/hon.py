@@ -37,7 +37,7 @@ class Hon:
     async def __aenter__(self) -> Self:
         return await self.setup()
 
-    async def get_translations(self, language: str)-> dict[str, str]:
+    async def get_translations(self, language: str) -> dict[str, str]:
         return await self._api.get_translations(language)
 
     async def setup(self) -> Self:
