@@ -56,7 +56,7 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         appliances: "list[Appliance]",
         message_callback: "Callable[[], None] | None" = None,
     ) -> None:
-        self.task: asyncio.Task[None] | None = None
+        self.loop_task: asyncio.Task[None] | None = None
 
         self._appliances = appliances
         self._auth = authenticator
@@ -107,20 +107,20 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         appliance.attributes["connected"].update(connection_status)
 
     def _loop_break(self, task: asyncio.Task[None]) -> None:
-        self.task = None
+        self.loop_task = None
         with suppress(asyncio.CancelledError):
             _LOGGER.error("MQTT loop broken", exc_info=task.exception())
 
     async def __aenter__(self) -> "MQTTClient":
-        self.task = asyncio.create_task(self.loop())
-        self.task.add_done_callback(self._loop_break)
+        self.loop_task = asyncio.create_task(self.loop())
+        self.loop_task.add_done_callback(self._loop_break)
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self.task:
-            self.task.cancel()
+        if self.loop_task:
+            self.loop_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self.task
+                await self.loop_task
 
     @asynccontextmanager
     @backoff.on_exception(

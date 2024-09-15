@@ -8,10 +8,14 @@ from getpass import getpass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from pyhon.diagnostic import tool
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pyhon import Hon, HonAPI, MQTTClient, diagnose, printer
+from pyhon import Hon
 
 _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -22,99 +26,92 @@ def get_arguments() -> dict[str, Any]:
     parser = argparse.ArgumentParser(description="pyhOn: Command Line Utility")
     parser.add_argument("-u", "--user", help="user for haier hOn account")
     parser.add_argument("-p", "--password", help="password for haier hOn account")
-    subparser = parser.add_subparsers(title="commands", metavar="COMMAND")
-    keys = subparser.add_parser("keys", help="print as key format")
-    keys.add_argument("keys", help="print as key format", action="store_true")
-    keys.add_argument("--all", help="print also full keys", action="store_true")
-    export = subparser.add_parser("export")
-    export.add_argument("export", help="export pyhon data", action="store_true")
+    parser.add_argument(
+        "-i",
+        "--import",
+        help="import mock data from specified directory",
+        metavar="DIR",
+        type=Path,
+    )
+    parser.add_argument("-x", "--anonymous", help="anonymize data", action="store_true")
+    parser.add_argument(
+        "--json", help="print output as json instead of yaml", action="store_true"
+    )
+
+    subparser = parser.add_subparsers(dest="command")
+
+    dump = subparser.add_parser("dump", help="print devices data")
+    dump.add_argument("--keys", help="print as key format", action="store_true")
+
+    export = subparser.add_parser("export", help="export hOn APIs data")
     export.add_argument("--zip", help="create zip archive", action="store_true")
-    export.add_argument("--anonymous", help="anonymize data", action="store_true")
-    export.add_argument("directory", nargs="?", default=Path().cwd())
+    export.add_argument(
+        "--directory",
+        help="output directory, cwd if not specified",
+        default=Path().cwd(),
+        type=Path,
+    )
+
     translation = subparser.add_parser(
         "translate", help="print available translation keys"
     )
-    translation.add_argument(
-        "translate", help="language (de, en, fr...)", metavar="LANGUAGE"
-    )
-    translation.add_argument("--json", help="print as json", action="store_true")
-    parser.add_argument("-i", "--import", help="import pyhon data", nargs="?")
-    parser.add_argument("--mqtt", help="start mqtt client", action="store_true")
-    return vars(parser.parse_args())
+    translation.add_argument("language", help="language (de, en, fr...)")
 
+    subparser.add_parser("mqtt", help="test mqtt client")
 
-async def translate(language: str, json_output: bool = False) -> None:
-    async with HonAPI() as hon:
-        keys = await hon.translation_keys(language)
-    if json_output:
-        print(json.dumps(keys, indent=4))
-    else:
-        clean_keys = (
-            json.dumps(keys)
-            .replace("\\n", "\\\\n")
-            .replace("\\\\r", "")
-            .replace("\\r", "")
-        )
-        keys = json.loads(clean_keys)
-        print(printer.pretty_print(keys))
+    arguments = vars(parser.parse_args())
 
+    if arguments["command"] is None:
+        arguments["command"] = "dump"
+        arguments["keys"] = False
 
-def get_login_data(args: dict[str, str]) -> tuple[str, str]:
-    if not (user := args["user"]):
-        user = input("User for hOn account: ")
-    if not (password := args["password"]):
-        password = getpass("Password for hOn account: ")
-    return user, password
+    if arguments["command"] not in {"translate"}:
+        if arguments["user"] is None:
+            arguments["user"] = input("User for hOn account: ")
+        if arguments["password"] is None:
+            arguments["password"] = getpass("Password for hOn account: ")
+
+    return arguments
 
 
 async def main() -> None:
     args = get_arguments()
-    if language := args.get("translate"):
-        await translate(language, json_output=args.get("json", ""))
-        return
-    test_data_path = Path(path) if (path := args.get("import", "")) else None
+
+    # TODO: if --import is set, monkeypatch API to use local data
     async with Hon(
-        *get_login_data(args), mqtt=args["mqtt"], test_data_path=test_data_path
+        args["user"], args["password"], start_mqtt=False, load_data=False
     ) as hon:
-        for device in hon.appliances:
-            if args.get("export"):
-                anonymous = args.get("anonymous", False)
-                path = Path(args.get("directory", "."))
-                if not args.get("zip"):
-                    for file in await diagnose.appliance_data(device, path, anonymous):
-                        print(f"Created {file}")
-                else:
-                    archive = await device.zip_archive(path, anonymous)
-                    print(f"Created {archive}")
-                continue
-            print("=" * 10, device.appliance_type, "-", device.nick_name, "=" * 10)
+        match args:
+            case {
+                "command": "export",
+                "anonymous": anon,
+                "directory": path,
+                "zip": as_zip,
+            }:
+                await tool.Diagnoser.from_raw_api_data(hon._api, path, anon, as_zip)  # noqa: SLF001
 
-            if args.get("keys"):
-                data = device.data_dump()
-                attr = "get" if args.get("all") else "pop"
-                print(
-                    printer.key_print(getattr(data["attributes"], attr), "parameters")
-                )
-                print(printer.key_print(getattr(data, attr), "appliance"))
-                print(printer.key_print(data))
-                print(
-                    printer.pretty_print(
-                        printer.create_commands(data["commands"], concat=True)
-                    )
-                )
-            else:
-                print(device.yaml_export())
+            case {"command": "mqtt"}:
+                await hon.load_data()
+                async with hon.mqtt_client as m:
+                    if m.loop_task:
+                        await m.loop_task
 
-        if isinstance(hon.mqtt_client, MQTTClient) and hon.mqtt_client.task:
-            await hon.mqtt_client.task
+            case {"command": "dump", "keys": flat, "json": as_json, "anonymous": anon}:
+                await hon.load_data()
+                writer = json if as_json else yaml
+                for d in hon.appliances:
+                    data = tool.Diagnoser(d).as_dict(flat, anon)
+                    _LOGGER.info("%s - %s >>", d.appliance_type, d.nick_name)
+                    writer.dump(data, sys.stdout, sort_keys=False)
 
-
-def start() -> None:
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Aborted.")
+            case {"command": "translate", "language": lang, "json": as_json}:
+                writer = json if as_json else yaml
+                data = await hon.get_translations(lang)
+                writer.dump(data, sys.stdout)
 
 
 if __name__ == "__main__":
-    start()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        _LOGGER.info("Aborted by user")

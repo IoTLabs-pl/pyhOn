@@ -13,7 +13,7 @@ class ProgramParameter(EnumParameter):
         super().__init__(key, {}, group)
         self._command = command
         if "PROGRAM" in command.category:
-            self._value = command.category.rsplit(".", 1)[-1].lower()
+            self._value = command.category.rsplit(".", 1).pop().lower()
         else:
             self._value = command.category
         self._programs: dict[str, HonCommand] = command.categories

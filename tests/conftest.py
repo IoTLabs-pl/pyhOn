@@ -1,7 +1,7 @@
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -9,7 +9,7 @@ from pyhon.apis import API
 
 
 class Loader:
-    def __init__(self, data: Any = None, postprocessor: callable = None) -> None:
+    def __init__(self, data: Any = None, postprocessor: Callable = None) -> None:
         self.data = data
         self.postprocessor = postprocessor
 
@@ -52,8 +52,7 @@ def mock_api(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
         "statistics": Loader(data["statistics.json"], lambda x: json.loads(x)),
         "maintenance-cycle": Loader(data["maintenance.json"], lambda x: json.loads(x)),
         "favourite": Loader(postprocessor=lambda x: []),
-        "retrieve-last-activity": Loader(postprocessor=lambda x: {}),
-        "send": Loader(postprocessor=lambda x: {"payload": {"resultCode": "0"}}),
+        "send": Loader(postprocessor=lambda x: {"resultCode": "0"}),
     }
 
     async def __aenter__(self) -> "API":
@@ -67,7 +66,7 @@ def mock_api(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
         data: dict[str, Any] | None = None,
         response_path: Sequence[str] = ("payload",),
     ) -> Any:
-        path_suffix = endpoint.rsplit("/")[-1]
+        path_suffix = endpoint.rsplit("/").pop()
 
         return PATH_TO_LOADER[path_suffix].load()
 

@@ -27,6 +27,7 @@ warn_unused_ignores = true
 lint.extend-select = [
     "I",      # Imports
     "SLF001", # Private member access
+    "PYI018", # Unused TypeVar
 ]
 
 [tool.pytest.ini_options]

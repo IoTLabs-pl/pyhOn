@@ -1,6 +1,5 @@
 from collections.abc import Callable
-from contextlib import AsyncExitStack, nullcontext
-from pathlib import Path
+from contextlib import AsyncExitStack
 from typing import Any, Self
 
 from aiohttp import ClientSession
@@ -15,33 +14,44 @@ class Hon:
         email: str,
         password: str,
         session: ClientSession | None = None,
-        mqtt: bool = False,
         refresh_token: str | None = None,
-        test_data_path: Path | None = None,
+        *,
+        start_mqtt: bool = False,
+        load_data: bool = True,
     ):
-        self._test_data_path = test_data_path or Path().cwd()
         self._resources = AsyncExitStack()
         self._notify_function: Callable[[], None] | None = None
 
         self.appliances: list[Appliance] = []
+        if load_data and (not email or not password):
+            raise ValueError("Cannot load data without authentication")
 
-        self.auth = auth = Authenticator(email, password, session, refresh_token)
+        self._auth = auth = Authenticator(email, password, session, refresh_token)
 
+        self.mqtt_client = MQTTClient(auth, self.appliances, self.notify)
         self._api = API(auth, session)
-        self.mqtt_client = (
-            MQTTClient(auth, self.appliances, self.notify) if mqtt else nullcontext()
-        )
 
-    @property
-    def is_mqtt_enabled(self) -> bool:
-        return isinstance(self.mqtt_client, MQTTClient)
+        self._mqtt_autostart = start_mqtt
+        self._load_data = load_data
 
     async def __aenter__(self) -> Self:
         return await self.setup()
 
+    async def get_translations(self, language: str)-> dict[str, str]:
+        return await self._api.get_translations(language)
+
     async def setup(self) -> Self:
         await self._resources.enter_async_context(self._api)
 
+        if self._load_data:
+            await self.load_data()
+
+        if self._mqtt_autostart:
+            await self._resources.enter_async_context(self.mqtt_client)
+
+        return self
+
+    async def load_data(self) -> None:
         appliances_data = await self._api.load_appliances_data()
 
         self.appliances.extend(
@@ -50,10 +60,6 @@ class Hon:
                 for appliance_data in appliances_data
             ]
         )
-
-        await self._resources.enter_async_context(self.mqtt_client)
-
-        return self
 
     async def aclose(self) -> None:
         return await self._resources.aclose()
