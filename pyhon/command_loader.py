@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 def _clean_name(category: str) -> str:
     """Clean up category name"""
-    return category.rsplit(".", 1)[-1].lower() if "PROGRAM" in category else category
+    return category.rsplit(".", 1).pop().lower() if "PROGRAM" in category else category
 
 
 def loader(

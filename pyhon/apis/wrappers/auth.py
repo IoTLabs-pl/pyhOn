@@ -2,7 +2,7 @@ from pyhon import const
 
 from ._base import SessionWrapper
 
-_DOMAIN = const.AUTH_API_URL.rsplit("/", 1)[-1]
+_DOMAIN = const.AUTH_API_URL.rsplit("/", 1).pop()
 
 
 class AuthSessionWrapper(SessionWrapper):

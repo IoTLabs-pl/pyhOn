@@ -12,7 +12,7 @@ from uuid import uuid4
 import aiohttp
 
 from pyhon import const
-from pyhon.exceptions import HonAuthenticationError
+from pyhon.exceptions import AuthenticationException
 
 from . import device as HonDevice
 from .wrappers import AuthSessionWrapper
@@ -157,7 +157,7 @@ class Authenticator:
                     await self._retrieve_tokens()
 
             if not self._tokens.initialized:
-                raise HonAuthenticationError("Could not authenticate")
+                raise AuthenticationException("Could not authenticate")
 
     async def get_access_token(self, force: bool = False) -> str:
         """Get the access token.
@@ -233,7 +233,7 @@ class Authenticator:
 
             login_url = _HREF_REGEX.search(text)
             if not login_url:
-                raise HonAuthenticationError("No login URL found")
+                raise AuthenticationException("No login URL found")
 
             url = login_url[1]
             if url.startswith("/NewhOnLogin"):
@@ -269,7 +269,7 @@ class Authenticator:
                 async with self._session.get(url) as response:
                     url_match = _HREF_REGEX.search(await response.text())
                     if not url_match:
-                        raise HonAuthenticationError("No URL found in response")
+                        raise AuthenticationException("No URL found in response")
                     url = url_match[1]
                     if "ProgressiveLogin" not in url:
                         break

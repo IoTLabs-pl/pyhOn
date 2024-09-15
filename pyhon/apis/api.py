@@ -30,7 +30,7 @@ class API:
     @property
     def _session(self) -> DataSessionWrapper:
         if self.__session is None:
-            raise exceptions.NoAuthenticationException(
+            raise exceptions.NoAuthenticationDataException(
                 "No authentication data provided"
             )
         return self.__session
@@ -56,13 +56,23 @@ class API:
         params: dict[str, str] | None = None,
         data: dict[str, Any] | None = None,
         response_path: Sequence[str] = ("payload",),
+        anonymous: bool = False,
     ) -> Any:
         result: dict[str, Any] = {}
-        async with self._session.request(
-            "POST" if data else "GET",
-            f"{const.API_URL}/commands/v1/{endpoint}",
-            params=params,
-            json=data,
+        session: AnonymousSessionWrapper | DataSessionWrapper
+
+        if anonymous:
+            session = self._anonymous_session
+            url = f"{const.API_URL}/{endpoint}"
+        else:
+            session = self._session
+            url = f"{const.API_URL}/commands/v1/{endpoint}"
+
+        if endpoint.startswith("http"):
+            url = endpoint
+
+        async with session.request(
+            "POST" if data else "GET", url, params=params, json=data
         ) as response:
             result = await response.json()
             for field in response_path:
@@ -71,42 +81,24 @@ class API:
         return result
 
     async def load_appliances_data(self) -> list[dict[str, Any]]:
-        return (
-            await self.call("appliance", response_path=("payload", "appliances")) or []
+        return cast(
+            list[dict[str, Any]],
+            await self.call("appliance", response_path=("payload", "appliances")),
         )
 
-    async def appliance_configuration(self) -> dict[str, Any]:
-        async with self._anonymous_session.get(
-            f"{const.API_URL}/config/v1/program-list-rules"
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(dict[str, Any], payload)
-
-            return {}
-
-    async def app_config(
-        self, language: str = "en", beta: bool = True
-    ) -> dict[str, Any]:
-        async with self._anonymous_session.post(
-            f"{const.API_URL}/app-config",
-            json={
+    async def get_translations(self, language: str) -> dict[str, str]:
+        lang_url: str = await self.call(
+            "app-config",
+            data={
                 "languageCode": language,
-                "beta": beta,
+                "beta": True,
                 "appVersion": const.APP_VERSION,
                 "os": const.OS,
             },
-        ) as response:
-            result = await response.json()
-            if result and (payload := result.get("payload")):
-                return cast(dict[str, Any], payload)
+            anonymous=True,
+            response_path=("payload", "language", "jsonPath"),
+        )
 
-            return {}
-
-    async def translation_keys(self, language: str = "en") -> dict[str, Any]:
-        config = await self.app_config(language=language)
-        if url := config.get("language", {}).get("jsonPath"):
-            async with self._anonymous_session.get(url) as response:
-                return cast(dict[str, Any], await response.json())
-
-        return {}
+        return cast(
+            dict[str, str], await self.call(lang_url, anonymous=True, response_path=())
+        )

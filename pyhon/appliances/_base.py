@@ -1,11 +1,10 @@
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from pprint import pformat
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
-from pyhon import const, diagnose, exceptions
+from pyhon import const, exceptions
 from pyhon.apis import device as HonDevice
 from pyhon.attributes import Attribute
 from pyhon.command_loader import add_favourites, loader, recover_last_command_states
@@ -161,25 +160,6 @@ class Appliance:
     def available_settings(self) -> list[str]:
         return list(self.settings.keys())
 
-    def data_dump(self) -> dict[str, Any]:
-        return {
-            name: getattr(self, name).copy()
-            for name in (
-                "attributes",
-                "data",
-                "statistics",
-                "maintenance_cycle",
-                "additional_data",
-                "commands",
-            )
-        }
-
-    def yaml_export(self) -> str:
-        return diagnose.yaml_export(self.data_dump(), anonymous=True)
-
-    async def zip_archive(self, path: Path, anonymous: bool = True) -> str:
-        return await diagnose.zip_archive(self, path, anonymous)
-
     def sync_command_to_params(self, command_name: str) -> None:
         if command := self.commands.get(command_name):
             for key in self.attributes:
@@ -270,7 +250,9 @@ class Appliance:
 
         attributes = self.attributes
 
-        for name, values in payload.get("shadow", {}).get("parameters", {}).items():
+        for name, values in sorted(
+            payload.get("shadow", {}).get("parameters", {}).items()
+        ):
             if name in attributes:
                 attributes[name].update(values)
             else:

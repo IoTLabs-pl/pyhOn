@@ -2,11 +2,11 @@ class PyhOnException(Exception):
     pass
 
 
-class HonAuthenticationError(PyhOnException):
+class AuthenticationException(PyhOnException):
     pass
 
 
-class NoAuthenticationException(PyhOnException):
+class NoAuthenticationDataException(PyhOnException):
     pass
 
 
