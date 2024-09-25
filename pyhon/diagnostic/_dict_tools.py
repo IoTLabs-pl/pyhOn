@@ -4,16 +4,19 @@ from collections.abc import Generator
 from datetime import datetime
 from itertools import groupby
 from string import ascii_lowercase, ascii_uppercase, digits
-from typing import Any, Callable, Self, TypeVar, cast, overload
+from typing import Any, Callable, Never, Self, TypeVar, cast, overload
 
 from yarl import URL
 
 _KeyT = str | int
-_PrimiviteT = _KeyT | float
+_PrimiviteT = _KeyT | float | URL
 _PrimiviteGenericT = TypeVar("_PrimiviteGenericT", bound=_PrimiviteT)
-_JsonT = dict[str, "_JsonT"] | list["_JsonT"] | _PrimiviteT
+_JsonT = (
+    dict[str, "_JsonT"] | list["_JsonT"] | _PrimiviteT | list[Never] | dict[str, Never]
+)
 _FlattenedJsonKeyT = tuple[_KeyT, ...]
-_FlattenedJsonT = dict[_FlattenedJsonKeyT, _PrimiviteT]
+_FlattenedJsonValueT = _PrimiviteT | list[Never] | dict[str, Never]
+_FlattenedJsonT = dict[_FlattenedJsonKeyT, _FlattenedJsonValueT]
 
 
 _MAC_REGEX = re.compile(r"[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}")
@@ -60,7 +63,9 @@ class DictTool:
         return self
 
     @staticmethod
-    def __leaf_items(data: _JsonT) -> Generator[tuple[_FlattenedJsonKeyT, _PrimiviteT]]:
+    def __leaf_items(
+        data: _JsonT,
+    ) -> Generator[tuple[_FlattenedJsonKeyT, _FlattenedJsonValueT]]:
         """
         Recursively yield leaf items from a nested dictionary or list.
 
@@ -76,7 +81,7 @@ class DictTool:
                 for subkey, subvalue in DictTool.__leaf_items(value):
                     yield (cast(_KeyT, key), *subkey), subvalue
         else:
-            yield (), data
+            yield (), cast(_FlattenedJsonValueT, data)
 
     @staticmethod
     def __inflate(data: _FlattenedJsonT) -> _JsonT:
@@ -120,7 +125,7 @@ class DictTool:
             raise ValueError("Data not loaded")
         return self.__data
 
-    def get_flat_result(self) -> dict[str, _PrimiviteT]:
+    def get_flat_result(self) -> dict[str, _FlattenedJsonValueT]:
         """
         Get the processed result in a flattened form. After calling this method, the data is cleared.
 
@@ -129,7 +134,7 @@ class DictTool:
         """
 
         if set(self._data) == {()}:
-            r = self._data[()]
+            r = cast(dict[str, _FlattenedJsonValueT], self._data[()])
         else:
             r = {".".join(map(str, k)): v for k, v in self._data.items()}
 
@@ -224,24 +229,25 @@ class DictTool:
             DictTool: The instance of the DictTool.
         """
         for k, v in self._data.items():
-            if k and k[-1] in _RESTRICTED_KEYS:
-                v = self.__randomize_value(v)
+            if isinstance(v, _PrimiviteT):
+                if k and k[-1] in _RESTRICTED_KEYS:
+                    v = self.__randomize_value(v)
 
-            elif isinstance(v, str):
-                for regex, randomizer in (
-                    (_MAC_REGEX, self.__randomize_value),
-                    (_TIMESTAMP_REGEX, self.__randomize_date),
-                ):
-                    v = regex.sub(randomizer, v)
+                elif isinstance(v, str):
+                    for regex, randomizer in (
+                        (_MAC_REGEX, self.__randomize_value),
+                        (_TIMESTAMP_REGEX, self.__randomize_date),
+                    ):
+                        v = regex.sub(randomizer, v)
 
-            elif isinstance(v, URL):
-                v = v % tuple(
-                    (k, v.replace(v, self.__randomize_value(v)))
-                    for k, v in v.query.items()
-                    if k in _RESTRICTED_KEYS
-                )
+                elif isinstance(v, URL):
+                    v = v % tuple(
+                        (k, v.replace(v, self.__randomize_value(v)))
+                        for k, v in v.query.items()
+                        if k in _RESTRICTED_KEYS
+                    )
 
-            self._data[k] = v
+                self._data[k] = v
 
         return self
 
