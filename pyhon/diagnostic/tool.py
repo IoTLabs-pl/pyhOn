@@ -34,7 +34,7 @@ class CallData:
     def metadata(self) -> dict[str, Any]:
         return self.processor(
             {
-                "url": str(self.response.url),
+                "url": self.response.url,
                 "method": self.response.method,
                 "status": self.response.status,
                 "invoker": self.invoker,
@@ -143,7 +143,7 @@ class Diagnoser:
         with self.__artifacts_container(directory, as_zip) as container:
             for name, content in files.items():
                 with container.joinpath(name).open("w") as f:
-                    json.dump(content, f, indent=2)
+                    json.dump(content, f, indent=2, default=str)
 
     async def api_dump(
         self, directory: Path, anonymous: bool = True, as_zip: bool = False

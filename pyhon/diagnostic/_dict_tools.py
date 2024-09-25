@@ -6,6 +6,8 @@ from itertools import groupby
 from string import ascii_lowercase, ascii_uppercase, digits
 from typing import Any, Callable, Self, TypeVar, cast, overload
 
+from yarl import URL
+
 _KeyT = str | int
 _PrimiviteT = _KeyT | float
 _PrimiviteGenericT = TypeVar("_PrimiviteGenericT", bound=_PrimiviteT)
@@ -27,6 +29,7 @@ _RESTRICTED_KEYS = {
     "PK",
     "lat",
     "lng",
+    "macAddress",
 }
 
 _FIFTY_YEARS = 50 * 365 * 24 * 60 * 60
@@ -39,19 +42,19 @@ class DictTool:
     """
 
     def __init__(self) -> None:
-        """Initialize the Processor with an empty randoms dictionary and no data."""
+        """Initialize the DictTool with an empty randoms dictionary and no data."""
         self._randoms: dict[_PrimiviteT, _PrimiviteT] = {}
         self.__data: _FlattenedJsonT | None = None
 
     def load(self, data: Any) -> Self:
         """
-        Load data into the Processor.
+        Load data into the DictTool.
 
         Args:
             data (dict | list): The data to be loaded.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         self.__data = {k: v for k, v in self.__leaf_items(data)}
         return self
@@ -67,7 +70,7 @@ class DictTool:
         Yields:
             Generator[tuple[tuple[str | int, ...], Any]]: Tuples of keys and values.
         """
-        if isinstance(data, dict | list):
+        if isinstance(data, dict | list) and len(data) > 0:
             items = data.items() if isinstance(data, dict) else enumerate(data)
             for key, value in items:
                 for subkey, subvalue in DictTool.__leaf_items(value):
@@ -86,9 +89,8 @@ class DictTool:
         Returns:
             dict | list: The nested structure.
         """
-        key = next(iter(data.keys()))
-        if len(key) == 0:
-            return data[key]
+        if set(data) == {()}:
+            return data[()]
 
         groups = {
             key: {k[1:]: v for k, v in group}
@@ -97,7 +99,11 @@ class DictTool:
 
         inflated = {key: DictTool.__inflate(group) for key, group in groups.items()}
 
-        return list(inflated.values()) if isinstance(key[0], int) else inflated
+        return (
+            list(inflated.values())
+            if all(isinstance(key, int) for key in inflated)
+            else inflated
+        )
 
     @property
     def _data(self) -> _FlattenedJsonT:
@@ -121,7 +127,12 @@ class DictTool:
         Returns:
             dict: The processed result.
         """
-        r = {".".join(map(str, k)): v for k, v in self._data.items()}
+
+        if set(self._data) == {()}:
+            r = self._data[()]
+        else:
+            r = {".".join(map(str, k)): v for k, v in self._data.items()}
+
         self.__data = None
         return r
 
@@ -210,11 +221,10 @@ class DictTool:
         Anonymize data by replacing restricted keys with random values.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         for k, v in self._data.items():
-            direct_key = k[-1]
-            if direct_key in _RESTRICTED_KEYS:
+            if k and k[-1] in _RESTRICTED_KEYS:
                 v = self.__randomize_value(v)
 
             elif isinstance(v, str):
@@ -224,11 +234,12 @@ class DictTool:
                 ):
                     v = regex.sub(randomizer, v)
 
-                if v.startswith("http"):
-                    for pair in v.split("&"):
-                        key, _, value = pair.partition("=")
-                        if key in _RESTRICTED_KEYS:
-                            v = v.replace(value, self.__randomize_value(value))
+            elif isinstance(v, URL):
+                v = v % tuple(
+                    (k, v.replace(v, self.__randomize_value(v)))
+                    for k, v in v.query.items()
+                    if k in _RESTRICTED_KEYS
+                )
 
             self._data[k] = v
 
@@ -239,7 +250,7 @@ class DictTool:
         Remove empty values from the data.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         self.__data = {k: v for k, v in self._data.items() if v}
         return self
