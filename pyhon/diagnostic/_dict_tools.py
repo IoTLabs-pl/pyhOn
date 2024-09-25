@@ -4,14 +4,19 @@ from collections.abc import Generator
 from datetime import datetime
 from itertools import groupby
 from string import ascii_lowercase, ascii_uppercase, digits
-from typing import Any, Callable, Self, TypeVar, cast, overload
+from typing import Any, Callable, Never, Self, TypeVar, cast, overload
+
+from yarl import URL
 
 _KeyT = str | int
-_PrimiviteT = _KeyT | float
+_PrimiviteT = _KeyT | float | URL
 _PrimiviteGenericT = TypeVar("_PrimiviteGenericT", bound=_PrimiviteT)
-_JsonT = dict[str, "_JsonT"] | list["_JsonT"] | _PrimiviteT
+_JsonT = (
+    dict[str, "_JsonT"] | list["_JsonT"] | _PrimiviteT | list[Never] | dict[str, Never]
+)
 _FlattenedJsonKeyT = tuple[_KeyT, ...]
-_FlattenedJsonT = dict[_FlattenedJsonKeyT, _PrimiviteT]
+_FlattenedJsonValueT = _PrimiviteT | list[Never] | dict[str, Never]
+_FlattenedJsonT = dict[_FlattenedJsonKeyT, _FlattenedJsonValueT]
 
 
 _MAC_REGEX = re.compile(r"[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}")
@@ -27,6 +32,7 @@ _RESTRICTED_KEYS = {
     "PK",
     "lat",
     "lng",
+    "macAddress",
 }
 
 _FIFTY_YEARS = 50 * 365 * 24 * 60 * 60
@@ -39,25 +45,27 @@ class DictTool:
     """
 
     def __init__(self) -> None:
-        """Initialize the Processor with an empty randoms dictionary and no data."""
+        """Initialize the DictTool with an empty randoms dictionary and no data."""
         self._randoms: dict[_PrimiviteT, _PrimiviteT] = {}
         self.__data: _FlattenedJsonT | None = None
 
     def load(self, data: Any) -> Self:
         """
-        Load data into the Processor.
+        Load data into the DictTool.
 
         Args:
             data (dict | list): The data to be loaded.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         self.__data = {k: v for k, v in self.__leaf_items(data)}
         return self
 
     @staticmethod
-    def __leaf_items(data: _JsonT) -> Generator[tuple[_FlattenedJsonKeyT, _PrimiviteT]]:
+    def __leaf_items(
+        data: _JsonT,
+    ) -> Generator[tuple[_FlattenedJsonKeyT, _FlattenedJsonValueT]]:
         """
         Recursively yield leaf items from a nested dictionary or list.
 
@@ -67,13 +75,13 @@ class DictTool:
         Yields:
             Generator[tuple[tuple[str | int, ...], Any]]: Tuples of keys and values.
         """
-        if isinstance(data, dict | list):
+        if isinstance(data, dict | list) and len(data) > 0:
             items = data.items() if isinstance(data, dict) else enumerate(data)
             for key, value in items:
                 for subkey, subvalue in DictTool.__leaf_items(value):
                     yield (cast(_KeyT, key), *subkey), subvalue
         else:
-            yield (), data
+            yield (), cast(_FlattenedJsonValueT, data)
 
     @staticmethod
     def __inflate(data: _FlattenedJsonT) -> _JsonT:
@@ -86,9 +94,8 @@ class DictTool:
         Returns:
             dict | list: The nested structure.
         """
-        key = next(iter(data.keys()))
-        if len(key) == 0:
-            return data[key]
+        if set(data) == {()}:
+            return data[()]
 
         groups = {
             key: {k[1:]: v for k, v in group}
@@ -97,7 +104,11 @@ class DictTool:
 
         inflated = {key: DictTool.__inflate(group) for key, group in groups.items()}
 
-        return list(inflated.values()) if isinstance(key[0], int) else inflated
+        return (
+            list(inflated.values())
+            if all(isinstance(key, int) for key in inflated)
+            else inflated
+        )
 
     @property
     def _data(self) -> _FlattenedJsonT:
@@ -114,14 +125,19 @@ class DictTool:
             raise ValueError("Data not loaded")
         return self.__data
 
-    def get_flat_result(self) -> dict[str, _PrimiviteT]:
+    def get_flat_result(self) -> dict[str, _FlattenedJsonValueT]:
         """
         Get the processed result in a flattened form. After calling this method, the data is cleared.
 
         Returns:
             dict: The processed result.
         """
-        r = {".".join(map(str, k)): v for k, v in self._data.items()}
+
+        if set(self._data) == {()}:
+            r = cast(dict[str, _FlattenedJsonValueT], self._data[()])
+        else:
+            r = {".".join(map(str, k)): v for k, v in self._data.items()}
+
         self.__data = None
         return r
 
@@ -210,27 +226,28 @@ class DictTool:
         Anonymize data by replacing restricted keys with random values.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         for k, v in self._data.items():
-            direct_key = k[-1]
-            if direct_key in _RESTRICTED_KEYS:
-                v = self.__randomize_value(v)
+            if isinstance(v, _PrimiviteT):
+                if k and k[-1] in _RESTRICTED_KEYS:
+                    v = self.__randomize_value(v)
 
-            elif isinstance(v, str):
-                for regex, randomizer in (
-                    (_MAC_REGEX, self.__randomize_value),
-                    (_TIMESTAMP_REGEX, self.__randomize_date),
-                ):
-                    v = regex.sub(randomizer, v)
+                elif isinstance(v, str):
+                    for regex, randomizer in (
+                        (_MAC_REGEX, self.__randomize_value),
+                        (_TIMESTAMP_REGEX, self.__randomize_date),
+                    ):
+                        v = regex.sub(randomizer, v)
 
-                if v.startswith("http"):
-                    for pair in v.split("&"):
-                        key, _, value = pair.partition("=")
-                        if key in _RESTRICTED_KEYS:
-                            v = v.replace(value, self.__randomize_value(value))
+                elif isinstance(v, URL):
+                    v = v % tuple(
+                        (k, v.replace(v, self.__randomize_value(v)))
+                        for k, v in v.query.items()
+                        if k in _RESTRICTED_KEYS
+                    )
 
-            self._data[k] = v
+                self._data[k] = v
 
         return self
 
@@ -239,7 +256,7 @@ class DictTool:
         Remove empty values from the data.
 
         Returns:
-            Processor: The instance of the Processor.
+            DictTool: The instance of the DictTool.
         """
         self.__data = {k: v for k, v in self._data.items() if v}
         return self
