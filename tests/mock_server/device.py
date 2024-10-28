@@ -43,7 +43,7 @@ class LegacyMockDevice(__MockDeviceABC):
     @property
     def slug(self) -> str:
         appliance_data = self.__load_file("appliance_data.json")
-        return f'{appliance_data["applianceTypeName"]}_{appliance_data['id']}'.lower()
+        return f'{appliance_data["applianceTypeName"]}_{appliance_data["id"]}'.lower()
 
     def __call_factory(
         self,
@@ -54,7 +54,7 @@ class LegacyMockDevice(__MockDeviceABC):
         status: int = 200,
         raw_payload: bool = False,
     ) -> "tuple[CallMetadata, Any]":
-        filename = f"{url.rsplit("/", 1).pop()}.json"
+        filename = f'{url.rsplit("/", 1).pop()}.json'
         url = self.__build_url(url, *query_params)
 
         if not raw_payload:
