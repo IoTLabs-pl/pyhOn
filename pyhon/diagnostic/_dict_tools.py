@@ -6,7 +6,7 @@ from itertools import groupby
 from string import ascii_lowercase, ascii_uppercase, digits
 from typing import Any, Callable, Never, Self, TypeVar, cast, overload
 
-from yarl import URL
+from httpx import URL
 
 _KeyT = str | int
 _PrimiviteT = _KeyT | float | URL
@@ -221,6 +221,23 @@ class DictTool:
             ),
         )
 
+    def __randomize_string(self, s: str) -> str:
+        """
+        Randomize a string by replacing mac adresses and dates.
+
+        Args:
+            s (str): The string to be randomized.
+
+        Returns:
+            str: The randomized string
+        """
+        for regex, randomizer in (
+            (_MAC_REGEX, self.__randomize_value),
+            (_TIMESTAMP_REGEX, self.__randomize_date),
+        ):
+            s = regex.sub(randomizer, s)
+        return s
+
     def anonymize(self) -> Self:
         """
         Anonymize data by replacing restricted keys with random values.
@@ -232,20 +249,18 @@ class DictTool:
             if isinstance(v, _PrimiviteT):
                 if k and k[-1] in _RESTRICTED_KEYS:
                     v = self.__randomize_value(v)
-
                 elif isinstance(v, str):
-                    for regex, randomizer in (
-                        (_MAC_REGEX, self.__randomize_value),
-                        (_TIMESTAMP_REGEX, self.__randomize_date),
-                    ):
-                        v = regex.sub(randomizer, v)
-
+                    v = self.__randomize_string(v)
                 elif isinstance(v, URL):
-                    v = v % tuple(
-                        (k, v.replace(v, self.__randomize_value(v)))
-                        for k, v in v.query.items()
-                        if k in _RESTRICTED_KEYS
+                    randomized_params = [
+                        (pk, self.__randomize_value(pv))
+                        for pk, pv in v.params.multi_items()
+                        if pk in _RESTRICTED_KEYS
+                    ]
+                    path = "/".join(
+                        self.__randomize_string(part) for part in v.path.split("/")
                     )
+                    v = v.copy_with(params=v.params.merge(randomized_params), path=path)
 
                 self._data[k] = v
 

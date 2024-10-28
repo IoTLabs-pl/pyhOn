@@ -1,12 +1,13 @@
 import asyncio
-import datetime
 import json
-import zipfile
 from collections.abc import Generator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from functools import cached_property
+from hashlib import md5
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from shutil import make_archive, rmtree
+from typing import TYPE_CHECKING, Any, Callable, TypedDict
 
 from pyhon import __version__
 from pyhon.appliances import Appliance
@@ -15,35 +16,93 @@ from pyhon.parameter import EnumParameter, RangeParameter
 from ._dict_tools import DictTool
 
 if TYPE_CHECKING:
-    from aiohttp import ClientResponse
+    from httpx import URL, Response
 
     from pyhon.apis import API
+
+
+class CallMetadata(TypedDict):
+    url: "URL"
+    method: str
+    status: int
+    invoker: str
+    filename: str
+    md5: str
 
 
 @dataclass
 class CallData:
     invoker: str
-    response: "ClientResponse"
-    processor: Callable[[dict[str, Any]], dict[str, Any]] = lambda x: x
+    response: "Response"
+    __serializer: Callable[[Any], bytes] | None = None
+
+    @property
+    def serializer(self) -> Callable[[Any], bytes] | None:
+        return self.__serializer
+
+    @serializer.setter
+    def serializer(self, value: Callable[[Any], bytes]) -> None:
+        assert self.__serializer is None, "Serializer already set"
+        self.__serializer = value
 
     @property
     def filename(self) -> str:
         return f'{self.response.url.path.rsplit("/", 1).pop()}.json'
 
     @property
-    def metadata(self) -> dict[str, Any]:
-        return self.processor(
-            {
-                "url": self.response.url,
-                "method": self.response.method,
-                "status": self.response.status,
-                "invoker": self.invoker,
-                "filename": self.filename,
-            }
+    def metadata(self) -> CallMetadata:
+        return CallMetadata(
+            url=self.response.url,
+            method=self.response.request.method,
+            status=self.response.status_code,
+            invoker=self.invoker,
+            filename=self.filename,
+            md5=md5(self.serialized).hexdigest(),
         )
 
-    async def payload(self) -> dict[str, Any]:
-        return self.processor(await self.response.json())
+    @cached_property
+    def serialized(self) -> bytes:
+        assert self.__serializer is not None, "Serializer not set"
+        return self.__serializer(self.response.json())
+
+
+class DumpMetadata(TypedDict):
+    pyhOn_version: str
+    timestamp: str
+    slug: str
+    calls: list[CallMetadata]
+
+
+@dataclass
+class DumpData:
+    slug: str
+    calls: list[CallData]
+    anonymous: bool
+    created_at: datetime = field(default_factory=datetime.now)
+
+    @property
+    def metadata(self) -> DumpMetadata:
+        return DumpMetadata(
+            pyhOn_version=__version__,
+            timestamp=self.created_at.isoformat(timespec="seconds"),
+            slug=self.slug,
+            calls=[call.metadata for call in self.calls],
+        )
+
+    @property
+    def files(self) -> Generator[tuple[str, str]]:
+        dict_tool = DictTool() if self.anonymous else None
+
+        def serializer(data):
+            if dict_tool:
+                data = dict_tool.load(data).anonymize().get_result()
+            return json.dumps(data, indent=2, default=str).encode()
+
+        for call in self.calls:
+            call.serializer = serializer
+            yield call.filename, call.serialized
+
+        yield "metadata.json", serializer(self.metadata)
 
 
 class Diagnoser:
@@ -71,16 +130,15 @@ class Diagnoser:
         Returns:
             List[Diagnoser]: List of Diagnoser instances.
         """
-        session = api._session  # noqa: SLF001
 
-        async with session.history_tracker:
+        with api._session.history_tracker as history:  # noqa: SLF001
             loader = api.load_appliances_data
             appliances_data = await loader()
 
             diagnosers = [
                 cls(
                     Appliance(api, data),
-                    CallData(loader.__qualname__, session._history[-1]),  # noqa: SLF001
+                    CallData(loader.__qualname__, history[-1]),
                 )
                 for data in appliances_data
             ]
@@ -105,45 +163,24 @@ class Diagnoser:
         if factory_call_data:
             self.call_data.append(factory_call_data)
 
-    @contextmanager
-    def __artifacts_container(
-        self, parent: Path, as_zip: bool
-    ) -> Generator[zipfile.Path | Path]:
-        """
-        Context manager to handle artifact container creation.
-
-        Args:
-            parent (Path): The parent directory.
-            as_zip (bool): Whether to save the data as a zip file.
-
-        Yields:
-            Path: The path to the artifact container.
-        """
-        artifact_name = (
-            f"{self.appliance.appliance_type.lower()}_{self.appliance.model_id}"
-        )
-        if as_zip:
-            parent.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(parent / f"{artifact_name}.zip", "w") as archive:
-                yield zipfile.Path(archive)
-        else:
-            directory = parent / artifact_name
-            directory.mkdir()
-            yield directory
-
-    def write_files(self, directory: Path, files: dict[str, Any], as_zip: bool) -> None:
+    def write_files(self, directory: Path, dump_data: DumpData, as_zip: bool) -> None:
         """
         Write files to the specified directory.
 
         Args:
             directory (Path): The directory to save the files.
-            files (dict): Dictionary of files to save.
+            dump_data (DumpData): The dump data.
             as_zip (bool): Whether to save the data as a zip file.
         """
-        with self.__artifacts_container(directory, as_zip) as container:
-            for name, content in files.items():
-                with container.joinpath(name).open("w") as f:
-                    json.dump(content, f, indent=2, default=str)
+        directory /= dump_data.slug
+        directory.mkdir()
+
+        for name, content in dump_data.files:
+            directory.joinpath(name).write_bytes(content)
+
+        if as_zip:
+            make_archive(directory.stem, "zip", directory)
+            rmtree(directory)
 
     async def api_dump(
         self, directory: Path, anonymous: bool = True, as_zip: bool = False
@@ -158,39 +195,26 @@ class Diagnoser:
         """
         session = self.appliance._api._session  # noqa: SLF001
 
-        for method in (
-            self.appliance.load_commands,
-            self.appliance.load_command_history,
-            self.appliance.load_attributes,
-            self.appliance.load_statistics,
-            self.appliance.load_maintenance_cycle,
-        ):
-            async with session.history_tracker:
-                try:
-                    await method()
-                except Exception:
-                    pass
-                self.call_data.append(
-                    CallData(method.__qualname__, session._history[-1])  # noqa: SLF001
-                )
+        for method_name in dir(self.appliance):
+            if method_name.startswith("load_") and callable(
+                method := getattr(self.appliance, method_name)
+            ):
+                with session.history_tracker as history:
+                    try:
+                        await method()
+                    finally:
+                        self.call_data.append(
+                            CallData(method.__qualname__, history[-1])
+                        )
 
-        if anonymous:
-            tool = DictTool()
-            for call in self.call_data:
-                call.processor = lambda x: tool.load(x).anonymize().get_result()
-
-        files = {
-            "metadata.json": {
-                "timestamp": datetime.datetime.now(tz=datetime.UTC).isoformat(
-                    timespec="seconds"
-                ),
-                "pyhOn_version": __version__,
-                "calls": [call.metadata for call in self.call_data],
-            }
-        } | {call.filename: await call.payload() for call in self.call_data}
+        dump = DumpData(
+            f"{self.appliance.appliance_type.lower()}_{self.appliance.model_id}",
+            self.call_data,
+            anonymous,
+        )
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.write_files, directory, files, as_zip)
+        await loop.run_in_executor(None, self.write_files, directory, dump, as_zip)
 
     def as_dict(self, flat_keys: bool = False, anonymous: bool = True) -> Any:
         """

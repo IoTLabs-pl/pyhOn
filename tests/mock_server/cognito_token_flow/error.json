@@ -1,0 +1,8 @@
+{
+  "error": {
+    "name": "JsonWebTokenError",
+    "message": "invalid signature",
+    "code": "VFJWTV",
+    "statusCode": 401
+  }
+}

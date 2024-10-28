@@ -1,5 +1,7 @@
+from urllib.parse import urlparse
+
 import pytest
-from yarl import URL
+from httpx import URL
 
 from pyhon.diagnostic._dict_tools import DictTool
 
@@ -20,7 +22,7 @@ from pyhon.diagnostic._dict_tools import DictTool
         {"a": [1, 2, 3]},
     ),
 )
-def test_dict_tool(data):
+def test_inflater(data):
     assert DictTool().load(data).get_result() == data
 
 
@@ -61,8 +63,31 @@ def test_flattener(data, expected):
         lambda x: {"a": {"b": ["c", x]}},
     ),
 )
-def test_anonymisation_by_value(data, processor):
+def test_anonymisation_by_string_value(data, processor):
     assert DictTool().load(processor(data)).anonymize().get_result() != processor(data)
+
+
+@pytest.mark.parametrize(
+    ("data", "modified_part"),
+    (
+        ("https://www.example.com/1234/aa-bb-cc-dd-ee-ff", "path"),
+        ("https://www.example.com/1234/2012-12-12T14:00:00Z", "path"),
+        ("https://www.example.com/aa-bb-cc-dd-ee-ff", "path"),
+        ("https://www.example.com/2012-12-12T14:00:00Z", "path"),
+        ("https://www.example.com/1234?code=someCode", "query"),
+        ("https://www.example.com/1234?macAddress=bb-aa-cc-dd-ff-ee", "query"),
+    ),
+)
+def test_anonymisation_by_url_value(data, modified_part):
+    result = DictTool().load({"url": URL(data)}).anonymize().get_result()["url"]
+
+    secret_url = urlparse(str(data))._asdict()
+    anonymised_url = urlparse(str(result))._asdict()
+
+    assert secret_url.pop(modified_part) != anonymised_url.pop(modified_part)
+
+    for key in secret_url:
+        assert secret_url[key] == anonymised_url[key]
 
 
 @pytest.mark.parametrize(
@@ -86,17 +111,8 @@ def test_anonymisation_by_value(data, processor):
         "some-text",
     ),
 )
-@pytest.mark.parametrize(
-    "processor",
-    (
-        lambda k, v: v,
-        lambda k, v: URL.build(scheme="http", host="example.com", query={k: v}),
-    ),
-)
-def test_anonymisation_by_key(key, value, processor):
-    assert DictTool().load({key: processor(key, value)}).anonymize().get_result() != {
-        key: processor(key, value)
-    }
+def test_anonymisation_by_key(key, value):
+    assert DictTool().load({key: value}).anonymize().get_result() != {key: value}
 
 
 @pytest.mark.parametrize(

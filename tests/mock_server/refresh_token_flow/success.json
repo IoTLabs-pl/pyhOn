@@ -1,0 +1,12 @@
+{
+  "access_token": "${access_token}",
+  "sfdc_community_url": "https://account2.hon-smarthome.com",
+  "sfdc_community_id": "SOME_COMMUNITY_ID",
+  "signature": "SOME_BASE64_SIGNATURE",
+  "scope": "refresh_token web openid api",
+  "id_token": "${id_token}",
+  "instance_url": "https://haiereurope.my.salesforce.com",
+  "id": "https://login.salesforce.com/id/SOME_ID/SOME_ID",
+  "token_type": "Bearer",
+  "issued_at": "1727350000000"
+}

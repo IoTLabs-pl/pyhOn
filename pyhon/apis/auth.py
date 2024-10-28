@@ -9,18 +9,17 @@ from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
-import aiohttp
+from httpx import AsyncClient, HTTPStatusError
 
 from pyhon import const
-from pyhon.exceptions import AuthenticationException
+from pyhon.exceptions import AuthorizationFlowException, InvalidCredentialsException
 
 from . import device as HonDevice
 from .wrappers import AuthSessionWrapper
 
 _LOGGER = getLogger(__name__)
 
-_HREF_REGEX = re_compile(r"""(?:url|href)\s*=\s*["'](.+?)["']""")
-_HON_REDIRECT_REGEX = re_compile(r"""["'](hon://.+?)['"]""")
+_HREF_REGEX = re_compile(r"""(?:href)\s*=\s*["'](.+?)["']""")
 
 
 def _parse_query_string(url: str, from_fragment: bool = False) -> dict[str, str]:
@@ -40,6 +39,28 @@ def _parse_query_string(url: str, from_fragment: bool = False) -> dict[str, str]
     return dict(parse_qsl(base))
 
 
+def _handle_js_redirect(html: str) -> str:
+    """Handle JavaScript redirect in HTML.
+
+    Args:
+        html (str): HTML to parse.
+
+    Returns:
+        str: URL to redirect to.
+    """
+    ## TODO: Sometimes html form with action to redirect is used?
+    match = _HREF_REGEX.search(html)
+    if not match:
+        raise AuthorizationFlowException("No redirect URL found")
+
+    location = unescape(match.group(1))
+
+    if location.startswith("/"):
+        location = f"{const.AUTH_API_URL}{location}"
+
+    return location
+
+
 def message_action_data(email: str, password: str, url: str) -> dict[str, str]:
     action = {
         "id": "79;a",
@@ -55,7 +76,7 @@ def message_action_data(email: str, password: str, url: str) -> dict[str, str]:
     data = {
         "message": {"actions": [action]},
         "aura.context": {"mode": "PROD", "app": "siteforce:loginApp2"},
-        "aura.pageURI": url.removeprefix(const.AUTH_API_URL),
+        "aura.pageURI": url,
         "aura.token": None,
     }
 
@@ -76,21 +97,16 @@ class _Tokens:
     __created_at: datetime = field(default_factory=datetime.now, init=False)
 
     @classmethod
-    def from_html(cls, html: str) -> "_Tokens":
-        """Parse access_token, id_token and refresh_token from the HTML
-        page redirecting to hOn app URI with OAuth data in fragment.
+    def from_redirect_url(cls, url: str) -> "_Tokens":
+        """Parse access_token, id_token and refresh_token from redirect URL.
 
         Args:
-            html (str): HTML page content.
+            url (str): URL to parse.
+
+        Returns:
+            _Tokens: Tokens parsed from URL.
         """
-        redirect_uri = _HON_REDIRECT_REGEX.search(html)
-
-        if not redirect_uri:
-            raise ValueError("No redirect URI found in HTML", html)
-
-        uri = unescape(redirect_uri[1])
-
-        parsed = _parse_query_string(uri, from_fragment=True)
+        parsed = _parse_query_string(url, from_fragment=True)
         return cls.from_dict(parsed)
 
     @classmethod
@@ -103,6 +119,9 @@ class _Tokens:
 
         Args:
             data (dict): Dictionary containing the tokens.
+
+        Returns:
+            _Tokens: Tokens parsed from the dictionary.
         """
         field_names = cls.initializable_field_names().intersection(data.keys())
         if len(field_names) == 0:
@@ -128,7 +147,7 @@ class Authenticator:
         self,
         email: str,
         password: str,
-        session: aiohttp.ClientSession | None = None,
+        session: AsyncClient | None = None,
         refresh_token: str | None = None,
     ) -> None:
         self._email = email
@@ -149,7 +168,7 @@ class Authenticator:
         """
 
         if not self._tokens.initialized or self._tokens.expires_soon or force:
-            async with self._session.history_tracker:
+            with self._session.history_tracker:
                 if self._tokens.refresh_token:
                     await self._refresh()
 
@@ -157,16 +176,16 @@ class Authenticator:
                     await self._retrieve_tokens()
 
             if not self._tokens.initialized:
-                raise AuthenticationException("Could not authenticate")
+                raise AuthorizationFlowException("Could not authenticate")
 
-    async def get_access_token(self, force: bool = False) -> str:
-        """Get the access token.
+    # async def get_access_token(self, force: bool = False) -> str:
+    #     """Get the access token.
 
-        Returns:
-            access_token (str): The access token.
-        """
-        await self._ensure_authenticated(force)
-        return cast(str, self._tokens.access_token)
+    #     Returns:
+    #         access_token (str): The access token.
+    #     """
+    #     await self._ensure_authenticated(force)
+    #     return cast(str, self._tokens.access_token)
 
     async def get_id_token(self, force: bool = False) -> str:
         """Get the ID token.
@@ -184,7 +203,7 @@ class Authenticator:
             cognito_token (str): The Cognito token.
         """
         if not self._tokens.cognito_token or force:
-            async with self._session.history_tracker:
+            with self._session.history_tracker:
                 await self._retrieve_cognito_token()
         return cast(str, self._tokens.cognito_token)
 
@@ -195,23 +214,22 @@ class Authenticator:
             iot_core_token (str): The AWS IoT Core token.
         """
         if not self._tokens.iot_core_token or force:
-            async with self._session.history_tracker:
+            with self._session.history_tracker:
                 await self._retrieve_cognito_token()
         return cast(str, self._tokens.iot_core_token)
 
-    async def _authorize(self) -> str | None:
+    async def _get_login_url(self) -> str:
         """Authorize the hOn account.
 
         Returns:
-            url (str|None): The URL to login to the hOn account or
-            None if the user is already authorized.
+            url (str|None): The URL to login to the hOn account.
         """
         self._tokens = _Tokens()
         self._session.clear_cookies()
 
-        _LOGGER.debug("Starting OAuth2 authorization")
+        _LOGGER.info("Starting OAuth2 authorization")
 
-        async with self._session.get(
+        response = await self._session.get(
             f"{const.AUTH_API_URL}/services/oauth2/authorize/expid_Login",
             params={
                 "response_type": "token id_token",
@@ -221,97 +239,80 @@ class Authenticator:
                 "scope": "api openid refresh_token web",
                 "nonce": str(uuid4()),
             },
-        ) as response:
-            text = await response.text()
+        )
+        return _handle_js_redirect(response.text).replace(
+            "/NewhOnLogin", "/s/login/NewhOnLogin", 1
+        )
 
-            try:
-                self._tokens = _Tokens.from_html(text)
-            except ValueError:
-                pass
-            else:
-                return None
-
-            login_url = _HREF_REGEX.search(text)
-            if not login_url:
-                raise AuthenticationException("No login URL found")
-
-            url = login_url[1]
-            if url.startswith("/NewhOnLogin"):
-                url = f"{const.AUTH_API_URL}/s/login{url}"
-
-            return url
-
-    async def _login(self) -> str | None:
+    async def _login(self) -> str:
         """Login to the hOn account. Retrieve the token_url.
 
         Returns:
-            token_url (str|None): The URL to retrieve the tokens or
-            None if the user is already logged in.
+            token_url (str): The URL to retrieve the tokens.
         """
-        if login_url := await self._authorize():
-            _LOGGER.debug("Logging in")
-            async with self._session.post(
-                f"{const.AUTH_API_URL}/s/sfsites/aura",
-                data=message_action_data(self._email, self._password, login_url),
-                params={"r": 3, "other.LightningLoginCustom.login": 1},
-            ) as response:
-                result = await response.json()
-                token_url: str = result["events"][0]["attributes"]["values"]["url"]
-                return token_url
+        login_url = await self._get_login_url()
 
-        return None
+        _LOGGER.info("Logging in")
+        response = await self._session.post(
+            f"{const.AUTH_API_URL}/s/sfsites/aura",
+            data=message_action_data(self._email, self._password, login_url),
+            params={"r": 3, "other.LightningLoginCustom.login": 1},
+        )
+        try:
+            result = response.json()
+            token_url: str = result["events"][0]["attributes"]["values"]["url"]
+            return token_url
+        except KeyError as e:
+            raise InvalidCredentialsException() from e
 
     async def _retrieve_tokens(self) -> None:
         """Retrieve the access_token, id_token and refresh_token from the token_url."""
-        if url := await self._login():
-            _LOGGER.debug("Getting tokens")
-            for _ in range(2):
-                async with self._session.get(url) as response:
-                    url_match = _HREF_REGEX.search(await response.text())
-                    if not url_match:
-                        raise AuthenticationException("No URL found in response")
-                    url = url_match[1]
-                    if "ProgressiveLogin" not in url:
-                        break
+        url = await self._login()
 
-            async with self._session.get(f"{const.AUTH_API_URL}{url}") as response:
-                self._tokens = _Tokens.from_html(await response.text())
+        _LOGGER.info("Getting tokens")
+        while True:
+            response = await self._session.get(url)
+            url = _handle_js_redirect(response.text)
+            if url.startswith("hon"):
+                break
+
+        self._tokens = _Tokens.from_redirect_url(url)
 
     async def _retrieve_cognito_token(self) -> None:
         """Retrieve the Cognito token."""
 
-        _LOGGER.debug("Trying to retrieve Cognito token")
-        async with self._session.post(
-            f"{const.API_URL}/auth/v1/login",
-            headers={"id-token": await self.get_id_token()},
-            json=HonDevice.descriptor(),
-        ) as response:
-            response_data = await response.json()
-            cognito_token = response_data["cognitoUser"]["Token"]
-            self._tokens.cognito_token = cognito_token
+        _LOGGER.info("Trying to retrieve Cognito token")
+        with self._session.history_tracker:
+            response = await self._session.post(
+                f"{const.API_URL}/auth/v1/login",
+                headers={"id-token": await self.get_id_token()},
+                json=HonDevice.descriptor(),
+            )
+            response_data = response.json()
 
-            iot_core_token = response_data["tokenSigned"]
-            self._tokens.iot_core_token = iot_core_token
+            self._tokens.cognito_token = response_data["cognitoUser"]["Token"]
+            self._tokens.iot_core_token = response_data["tokenSigned"]
 
     async def _refresh(self) -> None:
         try:
             refresh_token = self._tokens.refresh_token
-            async with self._session.post(
+            response = await self._session.post(
                 f"{const.AUTH_API_URL}/services/oauth2/token",
                 params={
                     "client_id": const.CLIENT_ID,
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
-            ) as response:
-                data = await response.json()
-                self._tokens = _Tokens.from_dict(data)
-                self._tokens.refresh_token = refresh_token
-        except aiohttp.ClientResponseError as e:
+            )
+            data = response.json()
+            self._tokens = _Tokens.from_dict(data)
+            self._tokens.refresh_token = refresh_token
+        except HTTPStatusError as e:
             _LOGGER.warning(
-                "Failed to obtain access token with refresh token: [%s] %s",
-                e.status,
-                e.message,
+                "Failed to obtain access token with refresh token: [%s: %s] %s",
+                e.response.status_code,
+                e.response.reason_phrase,
+                e.response.text,
             )
 
     async def __aenter__(self) -> "Authenticator":
