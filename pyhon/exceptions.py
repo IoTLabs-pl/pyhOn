@@ -2,12 +2,17 @@ class PyhOnException(Exception):
     pass
 
 
-class AuthenticationException(PyhOnException):
+class AuthorizationFlowException(PyhOnException):
     pass
 
 
-class NoAuthenticationDataException(PyhOnException):
+class InvalidCredentialsException(AuthorizationFlowException):
     pass
+
+
+class MissingCredentialsException(PyhOnException):
+    def __init__(self) -> None:
+        super().__init__("No authentication data provided")
 
 
 class ApiError(PyhOnException):

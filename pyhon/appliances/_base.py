@@ -77,9 +77,8 @@ class Appliance:
             await appliance.load_maintenance_cycle()
         except (KeyError, ValueError, IndexError) as error:
             _LOGGER.exception(error)
-            _LOGGER.error("Device data - %s", appliance_data)
-        finally:
-            return appliance
+
+        return appliance
 
     def __getitem__(self, item: str) -> Any:  # noqa: C901
         if "." in item:

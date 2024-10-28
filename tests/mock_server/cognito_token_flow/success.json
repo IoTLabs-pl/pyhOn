@@ -1,0 +1,6 @@
+{
+  "cognitoUser": {
+    "Token": "${cognito_token}"
+  },
+  "tokenSigned": "${iot_core_token}"
+}

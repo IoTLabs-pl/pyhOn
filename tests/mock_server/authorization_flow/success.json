@@ -1,0 +1,28 @@
+{
+  "actions": [
+    {
+      "id": "79;a",
+      "state": "SUCCESS",
+      "returnValue": null,
+      "error": []
+    },
+    {
+      "id": "COOSE",
+      "coos": "This page has changes since the last refresh. To get the latest updates, save your work and finish your conversations before refreshing the page.",
+      "state": "warning"
+    }
+  ],
+  "context": {
+    "whatisit?": "some context data"
+  },
+  "events": [
+    {
+      "descriptor": "markup://aura:clientRedirect",
+      "attributes": {
+        "values": {
+          "url": "${target}"
+        }
+      }
+    }
+  ]
+}

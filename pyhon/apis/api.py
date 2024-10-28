@@ -1,24 +1,20 @@
-import logging
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Any, Self, cast
 
-from aiohttp import ClientSession
+from httpx import AsyncClient
 
 from pyhon import const, exceptions
 from pyhon.apis.auth import Authenticator
 from pyhon.apis.wrappers import AnonymousSessionWrapper, DataSessionWrapper
 
-_LOGGER = logging.getLogger(__name__)
 
-
-# pylint: disable=too-many-instance-attributes
 class API:
     def __init__(
         self,
         authenticator: Authenticator | None = None,
-        session: ClientSession | None = None,
+        session: AsyncClient | None = None,
     ) -> None:
         self._resources = AsyncExitStack()
 
@@ -30,9 +26,7 @@ class API:
     @property
     def _session(self) -> DataSessionWrapper:
         if self.__session is None:
-            raise exceptions.NoAuthenticationDataException(
-                "No authentication data provided"
-            )
+            raise exceptions.MissingCredentialsException()
         return self.__session
 
     async def __aenter__(self) -> Self:
@@ -71,12 +65,12 @@ class API:
         if endpoint.startswith("http"):
             url = endpoint
 
-        async with session.request(
+        response = await session.request(
             "POST" if data else "GET", url, params=params, json=data
-        ) as response:
-            result = await response.json()
-            for field in response_path:
-                result = result.get(field, {})
+        )
+        result = response.json()
+        for field in response_path:
+            result = result.get(field, {})
 
         return result
 

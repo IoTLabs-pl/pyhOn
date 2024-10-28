@@ -2,7 +2,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, Self
 
-from aiohttp import ClientSession
+from httpx import AsyncClient
 
 from pyhon.apis import API, Authenticator, MQTTClient
 from pyhon.appliances import Appliance
@@ -13,7 +13,7 @@ class Hon:
         self,
         email: str,
         password: str,
-        session: ClientSession | None = None,
+        session: AsyncClient | None = None,
         refresh_token: str | None = None,
         *,
         start_mqtt: bool = False,

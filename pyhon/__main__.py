@@ -18,7 +18,7 @@ if __name__ == "__main__":
 from pyhon import Hon
 
 _LOGGER = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 
 def get_arguments() -> dict[str, Any]:
