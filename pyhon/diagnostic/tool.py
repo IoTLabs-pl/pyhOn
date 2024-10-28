@@ -90,10 +90,10 @@ class DumpData:
         )
 
     @property
-    def files(self) -> Generator[tuple[str, str]]:
+    def files(self) -> Generator[tuple[str, bytes]]:
         dict_tool = DictTool() if self.anonymous else None
 
-        def serializer(data):
+        def serializer(data: Any) -> bytes:
             if dict_tool:
                 data = dict_tool.load(data).anonymize().get_result()
             return json.dumps(data, indent=2, default=str).encode()

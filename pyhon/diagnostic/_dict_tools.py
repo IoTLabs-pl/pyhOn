@@ -252,15 +252,19 @@ class DictTool:
                 elif isinstance(v, str):
                     v = self.__randomize_string(v)
                 elif isinstance(v, URL):
-                    randomized_params = [
-                        (pk, self.__randomize_value(pv))
-                        for pk, pv in v.params.multi_items()
-                        if pk in _RESTRICTED_KEYS
-                    ]
+                    params = v.params
+                    params = params.merge(
+                        {
+                            k: [self.__randomize_value(v) for v in params.get_list(k)]
+                            for k in params
+                            if k in _RESTRICTED_KEYS
+                        }
+                    )
+
                     path = "/".join(
                         self.__randomize_string(part) for part in v.path.split("/")
                     )
-                    v = v.copy_with(params=v.params.merge(randomized_params), path=path)
+                    v = v.copy_with(params=params, path=path)
 
                 self._data[k] = v
 

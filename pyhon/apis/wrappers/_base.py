@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Generator
 from contextlib import AsyncExitStack, contextmanager
-from functools import wraps
-from typing import Any, Literal
+from functools import update_wrapper
+from typing import TYPE_CHECKING, Any, Literal
 
 from httpx import AsyncClient, Response
 
@@ -64,19 +64,21 @@ class SessionWrapper:
                 method, *args, headers=headers, follow_redirects=True, **kwargs
             )
             history.append(response)
-            
+
             if response.is_error:
                 response.raise_for_status()
 
             return response
 
-    @wraps(AsyncClient.get)
     def get(self, *args: Any, **kwargs: Any) -> Awaitable[Response]:
         return self.request("GET", *args, **kwargs)
 
-    @wraps(AsyncClient.post)
     def post(self, *args: Any, **kwargs: Any) -> Awaitable[Response]:
         return self.request("POST", *args, **kwargs)
+
+    if TYPE_CHECKING:
+        update_wrapper(get, AsyncClient.get)
+        update_wrapper(post, AsyncClient.post)
 
     async def __aenter__(self) -> "SessionWrapper":
         if self._session is None:
