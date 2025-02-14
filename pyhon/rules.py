@@ -35,7 +35,7 @@ class HonRuleSet:
         self,
         param_key: str,
         trigger_key: str,
-        trigger_data: dict[str, Any],
+        trigger_data: dict[str, Any] | str,
         extra: dict[str, str] | None = None,
     ) -> None:
         if not isinstance(trigger_data, dict):
