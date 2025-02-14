@@ -38,6 +38,8 @@ class HonRuleSet:
         trigger_data: dict[str, Any],
         extra: dict[str, str] | None = None,
     ) -> None:
+        if not isinstance(trigger_data, dict):
+            return
         trigger_key = trigger_key.replace("@", "")
         trigger_key = self._command.appliance.options.get(trigger_key, trigger_key)
         for multi_trigger_value, param_data in trigger_data.items():
