@@ -8,11 +8,14 @@ if TYPE_CHECKING:
     from pyhon.apis.auth import Authenticator
 
 
+# TODO: Install Throttler on Data session
+
+
 class DataSessionWrapper(SessionWrapper):
     def __init__(
         self,
         auth: "Authenticator",
-        session: "AsyncClient | None" = None,
+        session: "AsyncClient",
     ) -> None:
         super().__init__(session=session)
         self._auth = auth
@@ -23,8 +26,3 @@ class DataSessionWrapper(SessionWrapper):
             "id-token": await self._auth.get_id_token(),
             **(await super()._extra_headers()),
         }
-
-    async def __aenter__(self) -> "DataSessionWrapper":
-        await super().__aenter__()
-        await self._resources.enter_async_context(self._auth)
-        return self

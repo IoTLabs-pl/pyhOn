@@ -1,3 +1,5 @@
 aiomqtt~=2.0.1
 backoff~=2.2
 httpx~=0.26
+pydantic~=2.10
+PyYAML~=6.0.2

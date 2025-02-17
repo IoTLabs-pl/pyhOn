@@ -1,4 +1,5 @@
 import pytest
+from httpx import AsyncClient
 from mock_server import MockServer
 
 from pyhon.apis import Authenticator
@@ -6,12 +7,15 @@ from pyhon.exceptions import InvalidCredentialsException
 
 
 async def test_auth_base_flow(mock_server: MockServer):
-    async with Authenticator(
-        mock_server.username,
-        mock_server.password,
-    ) as auth:
-        print(*mock_server.router.routes, sep="\n")
-        assert await auth.get_id_token() == mock_server.id_token
+    async with AsyncClient() as client:
+        assert (
+            await Authenticator(
+                mock_server.username,
+                mock_server.password,
+                session=client,
+            ).get_id_token()
+            == mock_server.id_token
+        )
 
 
 @pytest.mark.parametrize(
@@ -26,20 +30,25 @@ async def test_auth_bad_credentials(
     mock_server: MockServer, username: str, password: str
 ):
     with pytest.raises(InvalidCredentialsException):
-        async with Authenticator(
-            username or mock_server.username,
-            password or mock_server.password,
-        ) as auth:
-            await auth.get_id_token()
+        async with AsyncClient() as client:
+            await Authenticator(
+                username or mock_server.username,
+                password or mock_server.password,
+                session=client,
+            ).get_id_token()
 
 
 async def test_auth_refresh_token_flow(mock_server: MockServer):
-    async with Authenticator(
-        mock_server.username,
-        mock_server.password,
-        refresh_token=mock_server.refresh_token,
-    ) as auth:
-        assert await auth.get_id_token() == mock_server.id_token
+    async with AsyncClient() as client:
+        assert (
+            await Authenticator(
+                mock_server.username,
+                mock_server.password,
+                session=client,
+                refresh_token=mock_server.refresh_token,
+            ).get_id_token()
+            == mock_server.id_token
+        )
 
     refresh_token_endpoint = mock_server.router.pop("refresh-token-endpoint")
 
@@ -50,12 +59,13 @@ async def test_auth_refresh_token_flow(mock_server: MockServer):
 
 
 async def test_auth_refresh_token_flow_fallback(mock_server: MockServer):
-    async with Authenticator(
-        mock_server.username,
-        mock_server.password,
-        refresh_token="somerandomtoken",
-    ) as auth:
-        assert await auth.get_id_token() == mock_server.id_token
+    async with AsyncClient() as client:
+        await Authenticator(
+            mock_server.username,
+            mock_server.password,
+            session=client,
+            refresh_token="somerandomtoken",
+        ).get_id_token() == mock_server.id_token
 
     assert mock_server.router["refresh-token-endpoint"].called
     assert mock_server.router["login-endpoint"].called

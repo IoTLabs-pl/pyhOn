@@ -1,4 +1,34 @@
+[project]
+name = 'pyhon'
+authors = [{ name = "Kuba Sawulski" }]
+requires-python = ">= 3.11"
+dynamic = ["version", "dependencies", "optional-dependencies"]
+license = { file = "LICENSE" }
+description = "Control hOn devices with Python"
+readme = "README.md"
+urls = { Github = "https://github.com/IoTLabs-pl/pyhOn" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+scripts = { pyhon = "pyhon.__main__:main" }
+
+[tool.setuptools.dynamic]
+version = { attr = "pyhon.version.__version__" }
+dependencies = { file = "requirements.txt" }
+optional-dependencies = { dev = { file = "requirements_dev.txt" } }
+[tool.setuptools.package-dir]
+pyhon = 'pyhon'
+
 [tool.mypy]
+plugins = ['pydantic.mypy']
 disable_error_code = "annotation-unchecked"
 enable_error_code = "ignore-without-code, redundant-self, truthy-iterable"
 follow_imports = "silent"

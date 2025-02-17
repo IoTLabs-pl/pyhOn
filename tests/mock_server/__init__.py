@@ -5,9 +5,10 @@ from typing import Any
 from httpx import Request, Response
 from respx import MockRouter, Route
 
+from pyhon.diagnostic.tool import Dump
+
 from .authorization_flow import AuthorizationFlow
 from .cognito_token_flow import CognitoTokenFlow
-from .device import MockDevice
 from .refresh_token_flow import RefreshTokenFlow
 
 
@@ -49,16 +50,18 @@ class MockServer:
 
         return Response(status_code=status_code, json=data)
 
-    def register_device(self, device: MockDevice) -> list[Route]:
+    def install_dump(self, dump: Dump) -> list[Route]:
         return [
             self.router.request(
-                call["method"],
-                call["url"],
-                name=f"{device.slug}:{call['filename'].removesuffix('.json')}",
+                call.method,
+                str(call.url),
+                name=f"{dump.slug}:{call.url_suffix}",
             ).mock(
                 side_effect=partial(
-                    self.secure_endpoint, status_code=call["status"], data=data
+                    self.secure_endpoint,
+                    status_code=call.status,
+                    data=call.content,
                 )
             )
-            for call, data in device.calls
+            for call in dump.calls
         ]
