@@ -3,24 +3,24 @@ import argparse
 import asyncio
 import json
 import logging
+import shutil
 import sys
 from getpass import getpass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
-from pyhon.diagnostic import tool
-
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from pyhon import Hon
+from .const import API_KEY, API_URL, APP_VERSION, OS
+from .diagnostic import Anonymiser, Diagnoser
+from .hon import Hon
 
 _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+# TODO: Maybe opt-in to click for better CLI maintability?
 def get_arguments() -> dict[str, Any]:
     """Get parsed arguments."""
     parser = argparse.ArgumentParser(description="pyhOn: Command Line Utility")
@@ -38,34 +38,25 @@ def get_arguments() -> dict[str, Any]:
         "--json", help="print output as json instead of yaml", action="store_true"
     )
 
-    subparser = parser.add_subparsers(dest="command")
+    subparser = parser.add_subparsers(dest="command", required=True)
 
-    dump = subparser.add_parser("dump", help="print devices data")
-    dump.add_argument("--keys", help="print as key format", action="store_true")
+    dump = subparser.add_parser("dump", help="dumps hOn APIs data")
+    dump.add_argument("dir", help="directory to dump data to", type=Path)
+    dump.add_argument("--zip", help="zip the dump", action="store_true")
 
-    export = subparser.add_parser("export", help="export hOn APIs data")
-    export.add_argument("--zip", help="create zip archive", action="store_true")
-    export.add_argument(
-        "--directory",
-        help="output directory, cwd if not specified",
-        default=Path().cwd(),
-        type=Path,
+    app_config = subparser.add_parser(
+        "app-config", help="print urls for app configuration"
     )
-
-    translation = subparser.add_parser(
-        "translate", help="print available translation keys"
-    )
-    translation.add_argument("language", help="language (de, en, fr...)")
+    app_config.add_argument("language", help="language (de, en, fr...)")
 
     subparser.add_parser("mqtt", help="test mqtt client")
+    subparser.add_parser(
+        "credentials", help="perform authentication flow and return tokens"
+    )
 
     arguments = vars(parser.parse_args())
 
-    if arguments["command"] is None:
-        arguments["command"] = "dump"
-        arguments["keys"] = False
-
-    if arguments["command"] not in {"translate"}:
+    if arguments["command"] not in {"app-config"}:
         if arguments["user"] is None:
             arguments["user"] = input("User for hOn account: ")
         if arguments["password"] is None:
@@ -78,36 +69,71 @@ async def main() -> None:
     args = get_arguments()
 
     # TODO: if --import is set, monkeypatch API to use local data
-    async with Hon(
-        args["user"], args["password"], start_mqtt=False, load_data=False
-    ) as hon:
-        match args:
-            case {
-                "command": "export",
-                "anonymous": anon,
-                "directory": path,
-                "zip": as_zip,
-            }:
-                await tool.Diagnoser.from_raw_api_data(hon._api, path, anon, as_zip)  # noqa: SLF001
 
-            case {"command": "mqtt"}:
-                await hon.load_data()
-                async with hon.mqtt_client as m:
-                    if m.loop_task:
-                        await m.loop_task
+    writer = json if args.get("json") else yaml
 
-            case {"command": "dump", "keys": flat, "json": as_json, "anonymous": anon}:
-                await hon.load_data()
-                writer = json if as_json else yaml
-                for d in hon.appliances:
-                    data = tool.Diagnoser(d).as_dict(flat, anon)
-                    _LOGGER.info("%s - %s >>", d.appliance_type, d.nick_name)
-                    writer.dump(data, sys.stdout, sort_keys=False)
-
-            case {"command": "translate", "language": lang, "json": as_json}:
-                writer = json if as_json else yaml
-                data = await hon.get_translations(lang)
+    match args:
+        case {"command": "credentials"}:
+            async with Hon(
+                email=args["user"],
+                password=args["password"],
+                enable_mqtt=False,
+                autoload=False,
+            ) as hon:
+                data = await Diagnoser(hon).tokens()
                 writer.dump(data, sys.stdout)
+
+        case {"command": "mqtt"}:
+            async with Hon(
+                email=args["user"],
+                password=args["password"],
+                enable_mqtt=True,
+                autoload=True,
+            ) as hon:
+                await hon.mqtt_client.loop_task
+
+        case {"command": "dump", "anonymous": anon, "dir": dir, "zip": zip}:
+            async with Hon(
+                email=args["user"],
+                password=args["password"],
+                enable_mqtt=False,
+                autoload=False,
+            ) as hon:
+                dir: Path
+
+                dump = await Diagnoser(hon).full_dump()
+
+                if dir:
+                    for d in dump.root:
+                        dir = dir / d.slug
+                        d.to_dir(dir)
+                        if zip:
+                            shutil.make_archive(dir, "zip", dir)
+                            shutil.rmtree(dir)
+                else:
+                    dump = dump.model_dump(
+                        mode="json",
+                        context={"anonymiser": Anonymiser().anonymise}
+                        if anon
+                        else None,
+                    )
+                    writer.dump(dump, sys.stdout, indent=2)
+
+        case {"command": "app-config", "language": lang}:
+            async with httpx.AsyncClient(
+                base_url=API_URL,
+                headers={"x-api-key": API_KEY},
+            ) as client:
+                response = await client.post(
+                    "app-config",
+                    json={
+                        "languageCode": lang,
+                        "beta": True,
+                        "appVersion": APP_VERSION,
+                        "os": OS,
+                    },
+                )
+                writer.dump(response.json(), sys.stdout)
 
 
 if __name__ == "__main__":

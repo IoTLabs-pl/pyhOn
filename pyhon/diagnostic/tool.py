@@ -1,285 +1,168 @@
-import asyncio
+import hashlib
 import json
-from collections.abc import Generator
-from dataclasses import dataclass, field
+from dataclasses import asdict
 from datetime import datetime
-from functools import cached_property
-from hashlib import md5
 from pathlib import Path
-from shutil import make_archive, rmtree
-from typing import TYPE_CHECKING, Any, Callable, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any
 
 from pyhon import __version__
-from pyhon.appliances import Appliance
-from pyhon.parameter import EnumParameter, RangeParameter
-
-from ._dict_tools import DictTool
+from pyhon.entities.appliance import Appliance
 
 if TYPE_CHECKING:
-    from httpx import URL, Response
+    from httpx import Response
 
-    from pyhon.apis import API
+    from pyhon.entities.appliance import Appliance
+    from pyhon.hon import Hon
 
 
-class CallMetadata(TypedDict):
-    url: "URL"
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    FieldSerializationInfo,
+    HttpUrl,
+    Json,
+    RootModel,
+    SerializerFunctionWrapHandler,
+    field_serializer,
+)
+
+
+class Call(BaseModel, frozen=True):
+    url: Annotated[HttpUrl, BeforeValidator(str)]
+    caller: str
     method: str
     status: int
-    invoker: str
-    filename: str
-    md5: str
+    content: Json[Any]
 
-
-@dataclass
-class CallData:
-    invoker: str
-    response: "Response"
-    __serializer: Callable[[Any], bytes] | None = None
-
-    @property
-    def serializer(self) -> Callable[[Any], bytes] | None:
-        return self.__serializer
-
-    @serializer.setter
-    def serializer(self, value: Callable[[Any], bytes]) -> None:
-        assert self.__serializer is None, "Serializer already set"
-        self.__serializer = value
-
-    @property
-    def filename(self) -> str:
-        return f'{self.response.url.path.rsplit("/", 1).pop()}.json'
-
-    @property
-    def metadata(self) -> CallMetadata:
-        return CallMetadata(
-            url=self.response.url,
-            method=self.response.request.method,
-            status=self.response.status_code,
-            invoker=self.invoker,
-            filename=self.filename,
-            md5=md5(self.serialized).hexdigest(),
+    @classmethod
+    def from_history_entry(cls, entry: tuple["Response", str]):
+        response, caller = entry
+        return cls(
+            url=response.request.url,
+            method=response.request.method,
+            status=response.status_code,
+            content=response.content,
+            caller=caller,
         )
 
-    @cached_property
-    def serialized(self) -> bytes:
-        assert self.__serializer is not None, "Serializer not set"
-        return self.__serializer(self.response.json())
+    @field_serializer("url", "content", mode="wrap")
+    def anonymiser(
+        self,
+        value: Any,
+        next: SerializerFunctionWrapHandler,
+        info: FieldSerializationInfo,
+    ) -> Any:
+        if info.context and (a := info.context.get("anonymiser")):
+            value = a(value)
 
-
-class DumpMetadata(TypedDict):
-    pyhOn_version: str
-    timestamp: str
-    slug: str
-    calls: list[CallMetadata]
-
-
-@dataclass
-class DumpData:
-    slug: str
-    calls: list[CallData]
-    anonymous: bool
-    created_at: datetime = field(default_factory=datetime.now)
+        return next(value, info)
 
     @property
-    def metadata(self) -> DumpMetadata:
-        return DumpMetadata(
-            pyhOn_version=__version__,
-            timestamp=self.created_at.isoformat(timespec="seconds"),
-            slug=self.slug,
-            calls=[call.metadata for call in self.calls],
+    def url_suffix(self) -> str:
+        return self.url.path.rsplit("/", 1).pop()
+
+
+class Dump(BaseModel):
+    slug: str
+    calls: list[Call]
+    pyhon_version: str = __version__
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    @classmethod
+    def from_dir(cls, dump_dir: Path) -> "Dump":
+        data: dict[str, list[dict[str, str]]] = json.loads(
+            (dump_dir / "metadata.json").read_bytes()
         )
 
-    @property
-    def files(self) -> Generator[tuple[str, bytes]]:
-        dict_tool = DictTool() if self.anonymous else None
+        for call in data["calls"]:
+            filename = call.pop("filename")
+            md5 = call.pop("md5")
 
-        def serializer(data: Any) -> bytes:
-            if dict_tool:
-                data = dict_tool.load(data).anonymize().get_result()
-            return json.dumps(data, indent=2, default=str).encode()
+            content = (dump_dir / filename).read_bytes()
+
+            if md5 != hashlib.md5(content).hexdigest():
+                raise ValueError(f"MD5 mismatch for {filename}")
+
+            call["content"] = json.loads(content)
+
+        return cls.model_validate(data)
+
+    def to_dir(self, dump_dir: Path) -> None:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+
+        data = self.model_dump(mode="json", exclude={"calls"})
+        calls_data = data["calls"] = []
 
         for call in self.calls:
-            call.serializer = serializer
-            yield call.filename, call.serialized
+            filename = call.url_suffix
+            content = json.dumps(call.content, indent=2)
+            md5 = hashlib.md5(content.encode()).hexdigest()
 
-        yield "metadata.json", serializer(self.metadata)
+            calls_data.append(
+                call.model_dump(mode="json", exclude={"content"})
+                | {
+                    "filename": filename,
+                    "md5": md5,
+                }
+            )
+
+            (dump_dir / f"{filename}.json").write_text(content)
+
+        (dump_dir / "metadata.json").write_text(json.dumps(data, indent=2))
+
+
+FullDump = RootModel[list[Dump]]
 
 
 class Diagnoser:
-    """
-    Diagnoser class to handle appliance diagnostics and data dumping.
+    def __init__(self, hon: "Hon") -> None:
+        self.hon = hon
 
-    Attributes:
-        appliance (Appliance): The appliance instance.
-        api_calls (dict): Dictionary to store API call data.
-    """
+    @property
+    def history_tracker(self):
+        return self.hon._api.history_tracker  # noqa: SLF001
 
-    @classmethod
-    async def from_raw_api_data(
-        cls, api: "API", directory: Path, anonymous: bool = True, as_zip: bool = False
-    ) -> None:
-        """
-        Create Diagnoser instances from raw API data.
+    async def appliance_dump(
+        self, appliance: "Appliance", factory_call: Call | None = None
+    ) -> Dump:
+        if factory_call is None:
+            with self.history_tracker as history:
+                await self.hon.get_appliances(recursive=False)
+                factory_call = Call.from_history_entry(history[-1])
 
-        Args:
-            api (API): The API instance.
-            directory (Path): The directory to save the data.
-            anonymous (bool, optional): Whether to anonymize the data. Defaults to True.
-            as_zip (bool, optional): Whether to save the data as a zip file. Defaults to False.
+        factory_call = factory_call.model_copy(deep=True)
+        appliances_data = factory_call.content["payload"]["appliances"]
+        appliances_data[:] = [
+            a
+            for a in appliances_data
+            if a["serialNumber"] == appliance.data.serial_number
+        ]
 
-        Returns:
-            List[Diagnoser]: List of Diagnoser instances.
-        """
+        with self.history_tracker as history:
+            await appliance.load_all()
 
-        with api._session.history_tracker as history:  # noqa: SLF001
-            loader = api.load_appliances_data
-            appliances_data = await loader()
+            return Dump(
+                slug=appliance.data.slug,
+                calls=[
+                    factory_call,
+                    *(Call.from_history_entry(entry) for entry in history),
+                ],
+            )
 
-            diagnosers = [
-                cls(
-                    Appliance(api, data),
-                    CallData(loader.__qualname__, history[-1]),
-                )
-                for data in appliances_data
+    async def full_dump(self) -> FullDump:
+        with self.history_tracker as history:
+            appliances = await self.hon.get_appliances(recursive=False)
+            factory_call = Call.from_history_entry(history[-1])
+
+        return FullDump.model_construct(
+            [
+                await self.appliance_dump(appliance, factory_call)
+                for appliance in appliances
             ]
-
-        for diagnoser in diagnosers:
-            await diagnoser.api_dump(directory, anonymous, as_zip)
-
-    def __init__(
-        self,
-        appliance: "Appliance",
-        factory_call_data: CallData | None = None,
-    ):
-        """
-        Initialize the Diagnoser instance.
-
-        Args:
-            appliance (Appliance): The appliance instance.
-            factory_call_data (CallMeta, optional): The factory call data. Defaults to None.
-        """
-        self.appliance = appliance
-        self.call_data: list[CallData] = []
-        if factory_call_data:
-            self.call_data.append(factory_call_data)
-
-    def write_files(self, directory: Path, dump_data: DumpData, as_zip: bool) -> None:
-        """
-        Write files to the specified directory.
-
-        Args:
-            directory (Path): The directory to save the files.
-            dump_data (DumpData): The dump data.
-            as_zip (bool): Whether to save the data as a zip file.
-        """
-        directory /= dump_data.slug
-        directory.mkdir()
-
-        for name, content in dump_data.files:
-            directory.joinpath(name).write_bytes(content)
-
-        if as_zip:
-            make_archive(directory.stem, "zip", directory)
-            rmtree(directory)
-
-    async def api_dump(
-        self, directory: Path, anonymous: bool = True, as_zip: bool = False
-    ) -> None:
-        """
-        Dump API data to the specified directory.
-
-        Args:
-            directory (Path): The directory to save the data.
-            anonymous (bool, optional): Whether to anonymize the data. Defaults to True.
-            as_zip (bool, optional): Whether to save the data as a zip file. Defaults to False.
-        """
-        session = self.appliance._api._session  # noqa: SLF001
-
-        for method_name in dir(self.appliance):
-            if method_name.startswith("load_") and callable(
-                method := getattr(self.appliance, method_name)
-            ):
-                with session.history_tracker as history:
-                    try:
-                        await method()
-                    finally:
-                        self.call_data.append(
-                            CallData(method.__qualname__, history[-1])
-                        )
-
-        dump = DumpData(
-            f"{self.appliance.appliance_type.lower()}_{self.appliance.model_id}",
-            self.call_data,
-            anonymous,
         )
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.write_files, directory, dump, as_zip)
+    async def tokens(self) -> dict[str, str]:
+        await self.hon.get_appliances(recursive=False)
 
-    def as_dict(self, flat_keys: bool = False, anonymous: bool = True) -> Any:
-        """
-        Convert the Diagnoser instance to a dictionary.
-
-        Args:
-            flat_keys (bool, optional): Whether to flatten the keys. Defaults to False.
-            anonymous (bool, optional): Whether to anonymize the data. Defaults to True.
-
-        Returns:
-            dict: The dictionary representation of the Diagnoser instance.
-        """
-        data = {
-            "data": self.appliance.data,
-            "additional_data": self.appliance.additional_data,
-            "attributes": {k: v.value for k, v in self.appliance.attributes.items()},
-            "commands": self._build_commands_dict(),
-            "rules": self._build_rules_dict(),
-            "statistics": self.appliance.statistics,
-            "maintenance_cycle": self.appliance.maintenance_cycle,
-        }
-
-        processor = DictTool().load(data).remove_empty()
-        if anonymous:
-            processor.anonymize()
-
-        return processor.get_flat_result() if flat_keys else processor.get_result()
-
-    def _build_commands_dict(self) -> dict[str, Any]:
-        """
-        Build a dictionary of appliance commands.
-
-        Returns:
-            dict: The dictionary of appliance commands.
-        """
-        return {
-            command.name: {
-                parameter_name: parameter.values
-                for parameter_name, parameter in command.parameters.items()
-                if isinstance(parameter, EnumParameter)
-            }
-            | {
-                parameter_name: {
-                    "min": parameter.min,
-                    "max": parameter.max,
-                    "step": parameter.step,
-                }
-                for parameter_name, parameter in command.parameters.items()
-                if isinstance(parameter, RangeParameter)
-            }
-            for command in self.appliance.commands.values()
-        }
-
-    def _build_rules_dict(self) -> dict[str, Any]:
-        """
-        Build a dictionary of appliance rules.
-
-        Returns:
-            dict: The dictionary of appliance rules.
-        """
-        return {
-            command.name: {
-                parameter_name: parameter.triggers
-                for parameter_name, parameter in command.parameters.items()
-                if parameter.triggers
-            }
-            for command in self.appliance.commands.values()
-        }
+        return asdict(self.hon._auth._tokens)  # noqa: SLF001

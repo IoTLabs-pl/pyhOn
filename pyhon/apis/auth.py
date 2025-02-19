@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from html import unescape
 from logging import getLogger
 from re import compile as re_compile
-from typing import Any, cast
+from typing import cast
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
@@ -15,11 +15,11 @@ from pyhon import const
 from pyhon.exceptions import AuthorizationFlowException, InvalidCredentialsException
 
 from . import device as HonDevice
-from .wrappers import AuthSessionWrapper
+from .wrappers import AuthSessionWrapper, api_call
 
 _LOGGER = getLogger(__name__)
 
-_HREF_REGEX = re_compile(r"""(?:href)\s*=\s*["'](.+?)["']""")
+_HREF_REGEX = re_compile(r"""(?:href|action)\s*=\s*["'](.+?)["']""")
 
 
 def _parse_query_string(url: str, from_fragment: bool = False) -> dict[str, str]:
@@ -147,7 +147,7 @@ class Authenticator:
         self,
         email: str,
         password: str,
-        session: AsyncClient | None = None,
+        session: AsyncClient,
         refresh_token: str | None = None,
     ) -> None:
         self._email = email
@@ -218,6 +218,7 @@ class Authenticator:
                 await self._retrieve_cognito_token()
         return cast(str, self._tokens.iot_core_token)
 
+    @api_call
     async def _get_login_url(self) -> str:
         """Authorize the hOn account.
 
@@ -244,6 +245,7 @@ class Authenticator:
             "/NewhOnLogin", "/s/login/NewhOnLogin", 1
         )
 
+    @api_call
     async def _login(self) -> str:
         """Login to the hOn account. Retrieve the token_url.
 
@@ -278,6 +280,7 @@ class Authenticator:
 
         self._tokens = _Tokens.from_redirect_url(url)
 
+    @api_call
     async def _retrieve_cognito_token(self) -> None:
         """Retrieve the Cognito token."""
 
@@ -293,6 +296,7 @@ class Authenticator:
             self._tokens.cognito_token = response_data["cognitoUser"]["Token"]
             self._tokens.iot_core_token = response_data["tokenSigned"]
 
+    @api_call
     async def _refresh(self) -> None:
         try:
             refresh_token = self._tokens.refresh_token
@@ -314,10 +318,3 @@ class Authenticator:
                 e.response.reason_phrase,
                 e.response.text,
             )
-
-    async def __aenter__(self) -> "Authenticator":
-        await self._resources.enter_async_context(self._session)
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        await self._resources.aclose()

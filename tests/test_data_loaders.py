@@ -1,7 +1,8 @@
 from pathlib import Path
 
 import pytest
-from mock_server import MockDevice, MockServer
+from mock_server import MockServer
+from mock_server.dump_loader import load_dump
 
 from pyhon import Hon
 
@@ -12,17 +13,16 @@ from pyhon import Hon
     autouse=True,
 )
 def mock_device(request: pytest.FixtureRequest, mock_server: MockServer):
-    device = MockDevice.from_dir(request.param)
-    device_routes = mock_server.register_device(device)
+    dump_routes = mock_server.install_dump(dump := load_dump(request.param))
 
-    yield device
+    yield dump
 
-    for route in device_routes:
+    for route in dump_routes:
         assert (
             route.called
-        ), f"{route.name.rsplit(':').pop()} was not called for {device.slug}"
+        ), f"{route.name.rsplit(':').pop()} was not called for {dump.slug}"
 
 
 async def test_load_data(mock_server: MockServer):
-    async with Hon(mock_server.username, mock_server.password, start_mqtt=False):
+    async with Hon(mock_server.username, mock_server.password, enable_mqtt=False):
         pass

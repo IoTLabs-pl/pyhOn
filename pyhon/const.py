@@ -2,7 +2,6 @@ AUTH_API_URL = "https://account2.hon-smarthome.com"
 API_URL = "https://api-iot.he.services"
 API_KEY = "GRCqFhC6Gk@ikWXm1RmnSmX1cm,MxY-configuration"
 
-MQTT_ALPN_PROTOCOL = "mqtt"
 MQTT_ENDPOINT = "a30f6tqw0oh1x0-ats.iot.eu-west-1.amazonaws.com"
 MQTT_PORT = 443
 MQTT_AUTHORIZER = "candy-iot-authorizer"
