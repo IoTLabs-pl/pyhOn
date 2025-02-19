@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import json
 import logging
+import shutil
 import sys
 from getpass import getpass
 from pathlib import Path
@@ -19,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+# TODO: Maybe opt-in to click for better CLI maintability?
 def get_arguments() -> dict[str, Any]:
     """Get parsed arguments."""
     parser = argparse.ArgumentParser(description="pyhOn: Command Line Utility")
@@ -38,7 +40,9 @@ def get_arguments() -> dict[str, Any]:
 
     subparser = parser.add_subparsers(dest="command", required=True)
 
-    subparser.add_parser("dump", help="dumps hOn APIs data")
+    dump = subparser.add_parser("dump", help="dumps hOn APIs data")
+    dump.add_argument("dir", help="directory to dump data to", type=Path)
+    dump.add_argument("--zip", help="zip the dump", action="store_true")
 
     app_config = subparser.add_parser(
         "app-config", help="print urls for app configuration"
@@ -52,7 +56,7 @@ def get_arguments() -> dict[str, Any]:
 
     arguments = vars(parser.parse_args())
 
-    if arguments["command"] not in {"translate"}:
+    if arguments["command"] not in {"app-config"}:
         if arguments["user"] is None:
             arguments["user"] = input("User for hOn account: ")
         if arguments["password"] is None:
@@ -66,8 +70,10 @@ async def main() -> None:
 
     # TODO: if --import is set, monkeypatch API to use local data
 
+    writer = json if args.get("json") else yaml
+
     match args:
-        case {"command": "credentials", "json": as_json}:
+        case {"command": "credentials"}:
             async with Hon(
                 email=args["user"],
                 password=args["password"],
@@ -75,7 +81,6 @@ async def main() -> None:
                 autoload=False,
             ) as hon:
                 data = await Diagnoser(hon).tokens()
-                writer = json if as_json else yaml
                 writer.dump(data, sys.stdout)
 
         case {"command": "mqtt"}:
@@ -87,22 +92,34 @@ async def main() -> None:
             ) as hon:
                 await hon.mqtt_client.loop_task
 
-        case {"command": "dump", "json": as_json, "anonymous": anon}:
+        case {"command": "dump", "anonymous": anon, "dir": dir, "zip": zip}:
             async with Hon(
                 email=args["user"],
                 password=args["password"],
                 enable_mqtt=False,
                 autoload=False,
             ) as hon:
-                writer = json if as_json else yaml
-                dump = await Diagnoser(hon).full_dump()
-                dump = dump.model_dump(
-                    mode="json",
-                    context={"anonymiser": Anonymiser().anonymise} if anon else None,
-                )
-                writer.dump(dump, sys.stdout, indent=2)
+                dir: Path
 
-        case {"command": "app-config", "language": lang, "json": as_json}:
+                dump = await Diagnoser(hon).full_dump()
+
+                if dir:
+                    for d in dump.root:
+                        dir = dir / d.slug
+                        d.to_dir(dir)
+                        if zip:
+                            shutil.make_archive(dir, "zip", dir)
+                            shutil.rmtree(dir)
+                else:
+                    dump = dump.model_dump(
+                        mode="json",
+                        context={"anonymiser": Anonymiser().anonymise}
+                        if anon
+                        else None,
+                    )
+                    writer.dump(dump, sys.stdout, indent=2)
+
+        case {"command": "app-config", "language": lang}:
             async with httpx.AsyncClient(
                 base_url=API_URL,
                 headers={"x-api-key": API_KEY},
@@ -116,7 +133,6 @@ async def main() -> None:
                         "os": OS,
                     },
                 )
-                writer = json if as_json else yaml
                 writer.dump(response.json(), sys.stdout)
 
 

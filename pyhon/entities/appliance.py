@@ -80,7 +80,7 @@ class Appliance:
     async def fetch(
         cls,
         api: API,
-        mqtt_client: "MQTTClient|None" = None,
+        mqtt_client: "MQTTClient",
         recursive: bool = False,
     ) -> list["Appliance"]:
         response = await api.appliances()
@@ -95,13 +95,20 @@ class Appliance:
         return appliances
 
     async def load_all(self):
-        return await asyncio.gather(
+        exceptions = await asyncio.gather(
             self.load_parameters(),
             self.load_commands(),
             self.load_statistics(),
             self.load_maintenance_cycles(),
             return_exceptions=True,
         )
+
+        # TODO: Handle exceptions at Endpoint class level
+        for e, fatal in zip(exceptions, [True, True, False, False]):
+            if isinstance(e, Exception):
+                if fatal:
+                    raise e
+                _LOGGER.warning(f"Failed to load data: {e}")
 
     @api_call
     async def load_parameters(self) -> None:

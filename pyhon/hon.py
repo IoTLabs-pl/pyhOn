@@ -1,9 +1,10 @@
 from contextlib import AsyncExitStack
+from functools import partial
 from typing import Any, Self
 
 from httpx import AsyncClient
 
-from pyhon.apis import API, Authenticator, MQTTClient, create_httpx_client
+from pyhon.apis import API, Authenticator, MQTTClient, create_tls_context
 from pyhon.entities.appliance import Appliance
 
 
@@ -17,44 +18,43 @@ class Hon:
         *,
         enable_mqtt: bool = False,
         autoload: bool = True,
-        close_session: bool = False,
     ):
-        self.resources = AsyncExitStack()
-
-        if autoload and (not email or not password):
-            raise ValueError("Cannot load data without authentication")
-
-        if session is None:
-            session = create_httpx_client()
-            
-        if close_session:
-            self.resources.push_async_exit(session)
-
-        self._auth = auth = Authenticator(email, password, session, refresh_token)
-        self._api = API(auth, session)
+        self._session = session
+        self._auth_factory = partial(
+            Authenticator, email, password, refresh_token=refresh_token
+        )
 
         self._mqtt_autostart = enable_mqtt
         self._load_appliances = autoload
 
+        self._resources = AsyncExitStack()
+
     async def __aenter__(self) -> Self:
-        return await self.setup()
+        if self._session is None:
+            self._session = await self._resources.enter_async_context(
+                AsyncClient(verify=await create_tls_context("http"))
+            )
 
-    async def setup(self) -> Self:
+        self._auth = self._auth_factory(session=self._session)
+        self._api = API(self._auth, self._session)
+        self.mqtt_client = MQTTClient(self._auth)
+
         if self._load_appliances:
-            await self.load_appliances()
+            self.appliances = await self.get_appliances()
 
-            if self._mqtt_autostart:
-                await self.resources.enter_async_context(self.mqtt_client)
+        if self._mqtt_autostart:
+            self.mqtt_client = await self._resources.enter_async_context(
+                self.mqtt_client
+            )
 
         return self
 
-    async def load_appliances(self) -> None:
-        self.mqtt_client = MQTTClient(self._auth)
-        self.appliances = await Appliance.fetch(
+    async def __aexit__(self, *args: Any) -> None:
+        return await self._resources.aclose()
+
+    async def get_appliances(self, recursive: bool = True) -> list[Appliance]:
+        return await Appliance.fetch(
             self._api,
             self.mqtt_client,
-            recursive=True,
+            recursive=recursive,
         )
-
-    async def __aexit__(self, *args: Any) -> None:
-        return await self.resources.aclose()

@@ -1,16 +1,17 @@
 import asyncio
 import logging
-import ssl
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from typing import TYPE_CHECKING, Any
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import TYPE_CHECKING, Any, TypeAlias
 from urllib.parse import urlencode
 
 import backoff
-from aiomqtt import Client, MqttError, ProtocolVersion, Topic
+from aiomqtt import Client, Message, MqttError, ProtocolVersion, Topic
 
 from pyhon import const
-from pyhon.apis import device as HonDevice
+from pyhon.apis import device
+
+from .tls import create_tls_context
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from aiomqtt.types import PayloadType
 
     from pyhon.apis.auth import Authenticator
+
+    Callback: TypeAlias = Callable[[PayloadType], None]
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,26 +32,89 @@ _PAHO_LOGGER.addFilter(lambda record: "PINGRESP" not in record.msg)
 _PAHO_LOGGER.addFilter(lambda record: "PINGREQ" not in record.msg)
 
 
+class Subscription:
+    def __init__(self, topic: Topic):
+        self.topic = topic
+        self.callbacks = set()
+        self.active = False
+
+    def add_callback(self, callback: "Callback"):
+        self.callbacks.add(callback)
+
+    def as_subscription_tuple(self):
+        return str(self.topic), 0
+
+
+class SubscriptionManager:
+    def __init__(self):
+        self.entries: dict[Topic, Subscription] = {}
+        self.outdated = asyncio.Event()
+
+    def add(self, topic: Topic, callback: "Callback"):
+        self.entries.setdefault(topic, Subscription(topic)).add_callback(callback)
+        self.outdated.set()
+
+    def __call__(self, message: Message):
+        if message.topic in self.entries:
+            for callback in self.entries[message.topic].callbacks:
+                try:
+                    callback(message.payload)
+                except Exception:
+                    _LOGGER.error(
+                        "Error while executing callback %s",
+                        callback,
+                        exc_info=True,
+                    )
+
+    async def subscribe_on_broker(self, client: Client):
+        unsubscribed = [sub for sub in self.entries.values() if not sub.active]
+        if not unsubscribed:
+            return
+
+        to_subscribe = [sub.as_subscription_tuple() for sub in unsubscribed]
+
+        await client.subscribe(to_subscribe)
+
+        for sub in unsubscribed:
+            sub.active = True
+
+        _LOGGER.info("Subscribed to topics: %s", to_subscribe)
+        self.outdated.clear()
+
+    def mark_inactive(self):
+        for sub in self.entries.values():
+            sub.active = False
+        self.outdated.set()
+
+    async def watchdog_task(self, client: Client):
+        try:
+            while True:
+                await self.outdated.wait()
+                await self.subscribe_on_broker(client)
+        finally:
+            self.mark_inactive()
+
+
 class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
     """
     MQTTClient is a context manager that handles the connection to the MQTT broker.
     It is responsible for subscribing to topics and dispatching messages to the appropriate callbacks.
     Subscription topic must be defined before entering the context manager.
 
-    TODO: Maybe implement a way to dynamically subscribe to topics while the client is running.
+    TODO: Implement a way to dynamically subscribe to topics while the client is running.
     """
 
     def __init__(
         self,
         authenticator: "Authenticator",
     ) -> None:
-        self.loop_task: asyncio.Task[None] | None = None
+        self.loop_task: asyncio.Task | None = None
 
         self._auth = authenticator
-        self._subscriptions: dict[Topic, set["Callable[[PayloadType], None]"]] = {}
+        self._subscriptions = SubscriptionManager()
 
     def subscribe(self, topic: str, callback: "Callable[[PayloadType], None]") -> None:
-        self._subscriptions.setdefault(Topic(topic), set()).add(callback)
+        self._subscriptions.add(Topic(topic), callback)
 
     async def _get_mqtt_username(self) -> str:
         query_params = {
@@ -58,21 +124,16 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         }
         return "?" + urlencode(query_params)
 
-    def _loop_break(self, task: asyncio.Task[None]) -> None:
-        self.loop_task = None
-        with suppress(asyncio.CancelledError):
-            _LOGGER.error("MQTT loop broken", exc_info=task.exception())
-
     async def __aenter__(self) -> "MQTTClient":
         self.loop_task = asyncio.create_task(self.loop())
-        self.loop_task.add_done_callback(self._loop_break)
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self.loop_task:
-            self.loop_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.loop_task
+        self.loop_task.cancel()
+        try:
+            await self.loop_task
+        except asyncio.CancelledError:
+            pass
 
     @asynccontextmanager
     @backoff.on_exception(
@@ -83,29 +144,29 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
         logger=_BACKOFF_LOGGER,
     )
     async def connect(self) -> AsyncIterator[Client]:
-        # tls_context = ssl.create_default_context()
-        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        tls_context.check_hostname = False
-        tls_context.verify_mode = ssl.VerifyMode.CERT_NONE
-        tls_context.set_alpn_protocols([const.MQTT_ALPN_PROTOCOL])
-
         async with Client(
             hostname=const.MQTT_ENDPOINT,
             port=const.MQTT_PORT,
-            identifier=HonDevice.MQTT_CLIENT_ID,
+            identifier=device.MQTT_CLIENT_ID,
             username=await self._get_mqtt_username(),
             protocol=ProtocolVersion.V5,
+            tls_context=await create_tls_context("mqtt"),
+            timeout=15,
             logger=_PAHO_LOGGER,
-            tls_context=tls_context,
         ) as client:
             _LOGGER.info("Connected to MQTT broker successfully")
-            await client.subscribe([(str(topic), 0) for topic in self._subscriptions])
-            _LOGGER.info("Subscribed to topics %s", list(self._subscriptions))
+            watchdog_task = asyncio.create_task(
+                self._subscriptions.watchdog_task(client)
+            )
 
             try:
                 yield client
             finally:
-                pass
+                watchdog_task.cancel()
+                try:
+                    await watchdog_task
+                except asyncio.CancelledError:
+                    pass
 
     @backoff.on_exception(
         backoff.constant,
@@ -119,13 +180,4 @@ class MQTTClient(AbstractAsyncContextManager["MQTTClient"]):
                 _LOGGER.debug(
                     "Received message on topic %s: %s", message.topic, message.payload
                 )
-                if message.topic in self._subscriptions:
-                    for callback in self._subscriptions[message.topic]:
-                        try:
-                            callback(message.payload)
-                        except Exception:
-                            _LOGGER.error(
-                                "Error while executing callback %s",
-                                callback,
-                                exc_info=True,
-                            )
+                self._subscriptions(message)

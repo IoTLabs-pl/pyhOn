@@ -8,10 +8,10 @@ from pydantic import (
     model_serializer,
 )
 
-from ...device import descriptor
+from ...device import descriptor as DeviceDescriptor
 from .._base import BaseModel, Data_T_Union
 
-_DEVICE = descriptor(True)
+_DEVICE = DeviceDescriptor(mobile=True)
 _ATTRIBUTES = {
     "channel": "mobileApp",
     "origin": "standardProgram",
@@ -21,16 +21,16 @@ _ATTRIBUTES = {
 
 class CommandPayload(BaseModel):
     ancillary_parameters: dict[str, Data_T_Union]
-    appliance_options: dict[str, str]
+    appliance_options: Annotated[dict[str, str], Field(default_factory=dict)]
     appliance_type: str
     attributes: Annotated[dict[str, str], Field(default=_ATTRIBUTES)]
     command_name: str
     device: Annotated[dict[str, Data_T_Union], Field(default=_DEVICE)]
     mac_address: str
     parameters: dict[str, Data_T_Union]
-    program_name: str
-    timestamp: Annotated[datetime, Field(default=lambda: datetime.now(UTC))]
-    transaction_id: Annotated[str, Field(default=None)]
+    program_name: Annotated[str | None, Field(default=None)]
+    timestamp: Annotated[datetime, Field(default_factory=lambda: datetime.now(UTC))]
+    transaction_id: Annotated[str | None, Field(default=None)]
 
     @field_serializer("ancillary_parameters", "parameters", mode="wrap")
     @staticmethod
@@ -40,6 +40,7 @@ class CommandPayload(BaseModel):
     ) -> dict[str, Data_T_Union]:
         return {k: str(v) for k, v in nxt(v).items()}
 
+    # TODO: Maybe remove?
     @field_serializer("timestamp", mode="wrap")
     @staticmethod
     def _trim_microseconds(v: datetime, nxt: SerializerFunctionWrapHandler) -> str:
@@ -49,7 +50,7 @@ class CommandPayload(BaseModel):
     def _match_transaction_id(self, nxt: SerializerFunctionWrapHandler):
         s = nxt(self)
 
-        if not s["transaction_id"].endswith(s["timestamp"]):
-            s["transaction_id"] = f'{s['mac_address']}_{s['timestamp']}'
+        if not s.get("transactionId"):
+            s["transactionId"] = f"{s['macAddress']}_{s['timestamp']}"
 
         return s

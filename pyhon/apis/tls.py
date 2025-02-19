@@ -1,6 +1,6 @@
+import asyncio
 import ssl
-
-import httpx
+from typing import Literal
 
 RAPIDSSL_TLS_RSA_CA_G1 = """
 -----BEGIN CERTIFICATE-----
@@ -34,7 +34,14 @@ zP3pGJ9FCbMHmMLLyuBd+uCWvVcF2ogYAawufChS/PT61D9rqzPRS5I2uqa3tmIT
 """
 
 
-def create_httpx_client() -> httpx.AsyncClient:
-    ssl_context = ssl.create_default_context()
-    ssl_context.load_verify_locations(cadata=RAPIDSSL_TLS_RSA_CA_G1)
-    return httpx.AsyncClient(verify=ssl_context)
+async def create_tls_context(mode: Literal["mqtt", "http"]) -> ssl.SSLContext:
+    context = await asyncio.get_event_loop().run_in_executor(
+        None, ssl.create_default_context
+    )
+    match mode:
+        case "mqtt":
+            context.set_alpn_protocols(["mqtt"])
+        case "http":
+            context.load_verify_locations(cadata=RAPIDSSL_TLS_RSA_CA_G1)
+
+    return context

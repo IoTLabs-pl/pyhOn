@@ -104,5 +104,5 @@ class ApplianceEndpoint(Endpoint[T]):
         url = self.url.format_map(interpolators)
         params = {k: v.format_map(interpolators) for k, v in self._params.items()}
 
-        data = data.model_dump() if data else None
+        data = data.model_dump(mode='json', by_alias=True, exclude_none=True) if data else None
         return self._call(url, params, data=data)

@@ -22,7 +22,7 @@ class FixedParameter(_BaseParameter, Generic[Data_T]):
 
 
 class _VariableParameter(_BaseParameter, Generic[Data_T]):
-    default_value: Data_T
+    default_value: Data_T=None
 
 
 class RangeParameter(_VariableParameter[Data_T], Generic[Data_T]):
@@ -32,13 +32,21 @@ class RangeParameter(_VariableParameter[Data_T], Generic[Data_T]):
     increment_value: Data_T
 
 
+# TODO: Migrate to Python enum.Flag?
 class EnumParameter(_VariableParameter[Data_T], Generic[Data_T]):
     typology: Literal["enum"]
-    enum_values: list[Data_T]
+    enum_values: set[Data_T]
+    default_value: set[Data_T]
+
+    @field_validator("default_value", mode="before")
+    def default_value_to_set(cls, v):
+        if isinstance(v, str):
+            return v.strip("[]").split("|")
+        return v
 
     @model_validator(mode="after")
-    def enum_values_in_default(self):
-        if self.default_value not in self.enum_values:
+    def default_value_in_allowed_values(self):
+        if any(v not in self.enum_values for v in self.default_value):
             raise ValueError("default_value must be in enum_values")
         return self
 
@@ -47,5 +55,6 @@ CommandParameter = Annotated[
     EnumParameter[Data_T_Union]
     | FixedParameter[Data_T_Union]
     | RangeParameter[Data_T_Union],
+    # | _BaseParameter,
     Field(discriminator="typology"),
 ]

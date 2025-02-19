@@ -1,6 +1,3 @@
-# Diagnostic tool have to inspect the internal APIs
-# ruff: noqa: SLF001
-
 import hashlib
 import json
 from dataclasses import asdict
@@ -14,7 +11,6 @@ from pyhon.entities.appliance import Appliance
 if TYPE_CHECKING:
     from httpx import Response
 
-    from pyhon.apis.api import API
     from pyhon.entities.appliance import Appliance
     from pyhon.hon import Hon
 
@@ -61,9 +57,9 @@ class Call(BaseModel, frozen=True):
             value = a(value)
 
         return next(value, info)
-    
+
     @property
-    def url_suffix(self)-> str:
+    def url_suffix(self) -> str:
         return self.url.path.rsplit("/", 1).pop()
 
 
@@ -101,7 +97,7 @@ class Dump(BaseModel):
         for call in self.calls:
             filename = call.url_suffix
             content = json.dumps(call.content, indent=2)
-            md5 = hashlib.md5(content).hexdigest()
+            md5 = hashlib.md5(content.encode()).hexdigest()
 
             calls_data.append(
                 call.model_dump(mode="json", exclude={"content"})
@@ -124,19 +120,15 @@ class Diagnoser:
         self.hon = hon
 
     @property
-    def api(self) -> "API":
-        return self.hon._api
-
-    @property
     def history_tracker(self):
-        return self.api._session.history_tracker
+        return self.hon._api.history_tracker  # noqa: SLF001
 
     async def appliance_dump(
         self, appliance: "Appliance", factory_call: Call | None = None
     ) -> Dump:
         if factory_call is None:
             with self.history_tracker as history:
-                await Appliance.fetch(self.api, recursive=False)
+                await self.hon.get_appliances(recursive=False)
                 factory_call = Call.from_history_entry(history[-1])
 
         factory_call = factory_call.model_copy(deep=True)
@@ -160,7 +152,7 @@ class Diagnoser:
 
     async def full_dump(self) -> FullDump:
         with self.history_tracker as history:
-            appliances = await Appliance.fetch(self.api, recursive=False)
+            appliances = await self.hon.get_appliances(recursive=False)
             factory_call = Call.from_history_entry(history[-1])
 
         return FullDump.model_construct(
@@ -171,6 +163,6 @@ class Diagnoser:
         )
 
     async def tokens(self) -> dict[str, str]:
-        await Appliance.fetch(self.api, recursive=False)
+        await self.hon.get_appliances(recursive=False)
 
-        return asdict(self.hon._auth._tokens)
+        return asdict(self.hon._auth._tokens)  # noqa: SLF001

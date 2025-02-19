@@ -15,4 +15,4 @@ class Parameter(Observable[ParameterDTO]):
     @classmethod
     async def fetch(cls, appliance: "Appliance") -> list["Parameter"]:
         response = await appliance.api.context(appliance=appliance)
-        return [cls(_data=param, appliance=appliance) for param in response.parameters]
+        return [cls(_data=param, appliance=appliance) for param in response.parameters.values()]

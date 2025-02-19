@@ -19,7 +19,7 @@ _DIGIT_PART_RE = compile(r"(\d+)")
 
 
 class ExtrasContainer:
-    def __repr__(self)->str:
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
 
 
@@ -32,7 +32,7 @@ class BaseModel(PydanticBaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reassign_extra_fields(cls, v:Any)->Any:
+    def reassign_extra_fields(cls, v: Any) -> Any:
         extras_containers = {
             k for k, v in cls.model_fields.items() if ExtrasContainer in v.metadata
         }
@@ -71,11 +71,12 @@ def _ensure_dict(value):
 
 def _clusterize(value: dict):
     try:
-        return [
-            {"key": k} | _ensure_dict(value[k]) for k in sorted(value, key=_natural_key)
-        ]
+        return {
+            k: ({"key": k} | _ensure_dict(value[k]))
+            for k in sorted(value, key=_natural_key)
+        }
     except (AttributeError, TypeError) as e:
         raise ValueError("Cluster must be a dict of dicts") from e
 
 
-Cluster = Annotated[list[T], BeforeValidator(_clusterize)]
+Cluster = Annotated[dict[str, T], BeforeValidator(_clusterize)]

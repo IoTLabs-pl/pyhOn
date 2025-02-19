@@ -39,6 +39,10 @@ class API:
             if isinstance(endpoint, Endpoint):
                 setattr(self, name, endpoint.bind_api(self))
 
+    @property
+    def history_tracker(self):
+        return self._session.history_tracker
+
     async def call(
         self,
         endpoint: str,
