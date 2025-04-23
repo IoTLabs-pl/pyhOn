@@ -403,7 +403,7 @@ class Appliance:
             "timestamp": now,
             "commandName": command,
             "transactionId": f"{self.mac_address}_{now}",
-            # "applianceOptions": self.options,
+            "applianceOptions": self.options,
             "device": HonDevice.descriptor(mobile=True),
             "attributes": {
                 "channel": "mobileApp",
